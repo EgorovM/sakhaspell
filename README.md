@@ -1,6 +1,6 @@
 # sakhaspell — спелчекер якутского языка
 
-**[Попробовать в браузере →](https://egorovm.github.io/sakhaspell/)**
+**[sakhaspell.michill.ru](https://sakhaspell.michill.ru) — попробовать в браузере**
 
 Проверка орфографии для якутского (саха тыла). Два слоя: словарный работает
 офлайн на CPU, нейросетевой добавляет контекст.
@@ -136,9 +136,10 @@ python scripts/eval_bench.py      --lexicon data/lexicon --bench data/bench --sp
 python scripts/train_tagger.py    --sent data/sent --out runs/tagger_v2 --steps 30000
 ```
 
-## Страница-демонстрация
+## Страница
 
-`docs/` — статическая страница для GitHub Pages. Словарь пережат во
+`docs/` — статическая страница: [sakhaspell.michill.ru](https://sakhaspell.michill.ru),
+зеркало на [GitHub Pages](https://egorovm.github.io/sakhaspell/). Словарь пережат во
 фронт-кодированный формат и весит **864 КБ** на все 300 тысяч форм, поэтому
 проверка идёт целиком в браузере и текст никуда не отправляется. Пересборка:
 
