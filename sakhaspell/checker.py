@@ -1,0 +1,137 @@
+"""Спелчекер: слой L1 целиком.
+
+Порядок проверки одного слова определяется не удобством, а тем, какие ошибки
+встречаются на самом деле:
+
+  1. слово принято лексиконом — выходим сразу, это 98% токенов;
+  2. восстановление ҕҥөһү перебором вариантов — самый массовый реальный случай,
+     решается точно и без поиска по расстоянию;
+  3. поиск по взвешенному расстоянию — настоящие опечатки;
+  4. ничего не нашли — помечаем слово, но подсказок не даём.
+
+Ранжирование кандидатов: цена правки в первую очередь, частота — во вторую.
+Частота берётся логарифмом, иначе очень частое слово перебивает правку вдвое
+меньшей цены и «көр» превращается в «биэр».
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from .errors import restoration_variants
+from .fuzzy import Trie
+from .lexicon import Lexicon
+from .norm import normalize
+from .tokenize import Token, tokenize
+
+# Во сколько сотых оценивается разница в частоте на порядок. Подобрано так, чтобы
+# правка ценой 0.35 (замена ҕ→г) не перебивалась ничем, а правки одной цены
+# разводились по частоте.
+FREQ_WEIGHT = 12
+MAX_SEARCH_COST = 220
+# Если восстановление спецбукв дало кандидата не дороже этого, полный поиск по
+# дереву пропускается. 105 — это три дешёвых замены (ҕ→г и т.п.) или одна такая
+# замена плюс запас; дороже уже начинается территория настоящих опечаток.
+CHEAP_ENOUGH = 105
+
+
+@dataclass
+class Suggestion:
+    form: str
+    cost: int
+    freq: int
+    kind: str          # restore | fuzzy
+
+    @property
+    def score(self) -> float:
+        return self.cost - FREQ_WEIGHT * math.log10(max(self.freq, 1))
+
+
+@dataclass
+class Issue:
+    token: Token
+    suggestions: list[Suggestion]
+    reason: str
+
+    @property
+    def best(self) -> str | None:
+        return self.suggestions[0].form if self.suggestions else None
+
+
+class SpellChecker:
+    def __init__(self, lexicon: Lexicon, *, max_suggestions: int = 5,
+                 use_tail: bool = True) -> None:
+        self.lex = lexicon
+        self.max_suggestions = max_suggestions
+        self.use_tail = use_tail
+        # Дерево строим по ядру: подсказывать надо только надёжными формами.
+        self.trie = Trie.from_freq(lexicon.core)
+
+    # --- одно слово ---------------------------------------------------------
+    def suggest(self, word: str) -> list[Suggestion]:
+        low = word.lower()
+        out: dict[str, Suggestion] = {}
+
+        # 0. известная тень искажения — исправление знаем точно
+        origin = self.lex.shadow.get(low)
+        if origin:
+            out[origin] = Suggestion(origin, 1, self.lex.core.get(origin, 1), "shadow")
+
+        # 1. восстановление специальных букв: перебор вариантов и точный поиск
+        # по словарю. Это дёшево — хэш вместо обхода дерева.
+        for v in restoration_variants(low):
+            if v == low:
+                continue
+            f = self.lex.core.get(v)
+            if f:
+                n_changed = sum(a != b for a, b in zip(v, low)) or 1
+                out[v] = Suggestion(v, 35 * n_changed, f, "restore")
+
+        # 2. Поиск по расстоянию — самая дорогая часть (обход префиксного дерева).
+        # Если восстановление уже дало дешёвого кандидата, полный поиск не нужен:
+        # деноминализация несравнимо частотнее опечаток, и найденный по ней
+        # вариант всё равно выиграет ранжирование.
+        if not out or min(s.cost for s in out.values()) > CHEAP_ENOUGH:
+            for c in self.trie.search(low, max_cost=MAX_SEARCH_COST,
+                                      limit=self.max_suggestions * 6):
+                if c.form == low:
+                    continue
+                prev = out.get(c.form)
+                if prev is None or c.cost < prev.cost:
+                    out[c.form] = Suggestion(c.form, c.cost, c.freq, "fuzzy")
+
+        res = sorted(out.values(), key=lambda s: s.score)
+        return _restore_case(word, res)[: self.max_suggestions]
+
+    # --- текст --------------------------------------------------------------
+    def check(self, text: str) -> list[Issue]:
+        text = normalize(text)
+        issues: list[Issue] = []
+        for t in tokenize(text):
+            v = self.lex.check_token(t, use_tail=self.use_tail)
+            if v.ok:
+                continue
+            issues.append(Issue(t, self.suggest(t.text), v.reason))
+        return issues
+
+    def correct(self, text: str) -> str:
+        text = normalize(text)
+        out, prev = [], 0
+        for iss in self.check(text):
+            if not iss.suggestions:
+                continue
+            out.append(text[prev:iss.token.start])
+            out.append(iss.suggestions[0].form)
+            prev = iss.token.end
+        out.append(text[prev:])
+        return "".join(out)
+
+
+def _restore_case(src: str, sugg: list[Suggestion]) -> list[Suggestion]:
+    if src.islower() or not src:
+        return sugg
+    if src.isupper():
+        return [Suggestion(s.form.upper(), s.cost, s.freq, s.kind) for s in sugg]
+    if src[0].isupper():
+        return [Suggestion(s.form.capitalize(), s.cost, s.freq, s.kind) for s in sugg]
+    return sugg

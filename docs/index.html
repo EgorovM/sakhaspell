@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="sah">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sakhaspell — саха тылын орфографиятын бэрэбиэркэтэ</title>
+<meta name="description" content="Спелчекер якутского языка. Работает в браузере, словарь на 300 тысяч словоформ.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>ҕ</text></svg>">
+<style>
+:root {
+  --bg: #fbfaf7;
+  --surface: #ffffff;
+  --line: #e5e1d8;
+  --line-strong: #d0cabd;
+  --ink: #1c1a17;
+  --ink-soft: #5f5a51;
+  --ink-faint: #8d877c;
+  --accent: #9a3412;
+  --accent-soft: #fef1e7;
+  --ok: #15803d;
+  --ok-soft: #f0fdf4;
+  --shadow: 0 1px 2px rgba(28,26,23,.05), 0 8px 24px -12px rgba(28,26,23,.18);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14130f;
+    --surface: #1c1a16;
+    --line: #2e2b25;
+    --line-strong: #423e35;
+    --ink: #eae6dd;
+    --ink-soft: #a8a294;
+    --ink-faint: #7a7466;
+    --accent: #f97316;
+    --accent-soft: #2a1a0e;
+    --ok: #4ade80;
+    --ok-soft: #10231a;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14130f; --surface: #1c1a16; --line: #2e2b25; --line-strong: #423e35;
+  --ink: #eae6dd; --ink-soft: #a8a294; --ink-faint: #7a7466;
+  --accent: #f97316; --accent-soft: #2a1a0e; --ok: #4ade80; --ok-soft: #10231a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 940px; margin: 0 auto; padding: 0 20px 80px; }
+
+/* --- шапка --- */
+header { padding: 56px 0 32px; }
+.brand {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+h1 {
+  font: 600 30px/1.1 var(--serif); margin: 0; letter-spacing: -.01em;
+}
+.tag {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-faint); border: 1px solid var(--line-strong);
+  padding: 3px 8px; border-radius: 99px;
+}
+.lede { margin: 0; color: var(--ink-soft); max-width: 62ch; font-size: 17px; }
+.lede b { color: var(--ink); font-weight: 600; }
+
+/* --- редактор --- */
+.editor {
+  position: relative; margin-top: 28px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.editor-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+  font-size: 12px; color: var(--ink-faint); flex-wrap: wrap;
+}
+.stack { position: relative; }
+#backdrop, #input {
+  font: 17px/1.75 var(--serif);
+  padding: 18px; margin: 0; border: 0; width: 100%;
+  white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+  letter-spacing: 0;
+}
+#backdrop {
+  position: absolute; inset: 0; pointer-events: none; color: transparent;
+  overflow: hidden;
+}
+#backdrop mark {
+  background: none; color: transparent;
+  border-bottom: 2px solid var(--accent);
+  border-radius: 1px;
+}
+#input {
+  position: relative; background: transparent; color: var(--ink);
+  resize: vertical; min-height: 168px; display: block;
+  font-family: var(--serif);
+}
+#input:focus { outline: none; }
+.editor:focus-within { border-color: var(--line-strong); }
+
+/* --- кнопки --- */
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+button {
+  font: inherit; font-size: 14px; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--surface);
+  color: var(--ink); padding: 7px 13px; transition: .15s;
+}
+button:hover:not(:disabled) { border-color: var(--ink-faint); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary {
+  background: var(--ink); color: var(--bg); border-color: var(--ink);
+}
+button.primary:hover:not(:disabled) { opacity: .85; }
+.samples { margin-top: 14px; }
+.samples button { font-size: 13px; padding: 6px 11px; }
+.samples-label {
+  font-size: 12px; color: var(--ink-faint); margin: 0 0 8px;
+  letter-spacing: .02em;
+}
+
+/* --- результат --- */
+#result { margin-top: 22px; }
+.empty {
+  padding: 16px 18px; border-radius: 10px; font-size: 15px;
+  background: var(--ok-soft); color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent);
+}
+.issues { display: flex; flex-direction: column; gap: 8px; }
+.issue {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface);
+}
+.issue .was {
+  font-family: var(--mono); font-size: 14px; color: var(--accent);
+  text-decoration: line-through; text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.issue .arrow { color: var(--ink-faint); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  font-family: var(--mono); font-size: 14px; padding: 4px 10px;
+  border-radius: 7px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink);
+}
+.chip.best { background: var(--accent-soft); border-color: var(--accent); }
+.chip:hover { border-color: var(--ink); }
+.issue .why {
+  margin-left: auto; font-size: 11px; color: var(--ink-faint);
+  letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
+}
+.none { font-size: 13px; color: var(--ink-faint); font-style: italic; }
+
+/* --- статус --- */
+#status {
+  margin-top: 10px; font-size: 12.5px; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums; min-height: 20px;
+}
+.bar {
+  height: 2px; background: var(--line); border-radius: 2px; overflow: hidden;
+  margin-top: 12px;
+}
+.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+
+/* --- нижние разделы --- */
+section { margin-top: 56px; }
+h2 {
+  font: 600 13px/1 system-ui, sans-serif; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-faint);
+  margin: 0 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+.cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.card {
+  padding: 16px; border: 1px solid var(--line); border-radius: 11px;
+  background: var(--surface);
+}
+.card .n {
+  font: 600 26px/1 var(--serif); display: block; margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.card .l { font-size: 13px; color: var(--ink-soft); line-height: 1.45; }
+.card .s { font-size: 11.5px; color: var(--ink-faint); margin-top: 5px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:last-child td { border-bottom: 0; }
+td strong { font-weight: 600; }
+.scroll { overflow-x: auto; }
+
+p.note { color: var(--ink-soft); font-size: 14.5px; max-width: 68ch; }
+p.note code, li code {
+  font-family: var(--mono); font-size: .9em; background: var(--accent-soft);
+  padding: 1px 5px; border-radius: 4px;
+}
+ul.note { color: var(--ink-soft); font-size: 14.5px; max-width: 68ch; padding-left: 20px; }
+ul.note li { margin-bottom: 8px; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+footer {
+  margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--ink-faint);
+  display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">
+    <h1>sakhaspell</h1>
+    <span class="tag">саха тыла · yakut</span>
+  </div>
+  <p class="lede">
+    Проверка орфографии якутского языка. Работает прямо в браузере: словарь на
+    <b>300 304 словоформы</b> загружается один раз, дальше текст никуда не
+    отправляется. Главное, что он умеет — <b>возвращать буквы ҕ ҥ ө һ ү</b> в
+    текст, набранный с русской раскладки.
+  </p>
+
+  <div class="editor">
+    <div class="editor-head">
+      <span id="dict">загружаю словарь…</span>
+      <div class="row">
+        <button id="fix" disabled>Исправить всё</button>
+        <button id="clear">Очистить</button>
+      </div>
+    </div>
+    <div class="stack">
+      <div id="backdrop" aria-hidden="true"></div>
+      <textarea id="input" spellcheck="false" autocapitalize="off"
+        placeholder="Introduce якутский текст…"></textarea>
+    </div>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+  <div id="status"></div>
+
+  <div class="samples">
+    <p class="samples-label">Попробуйте на примерах:</p>
+    <div class="row" id="samples"></div>
+  </div>
+
+  <div id="result"></div>
+</header>
+
+<section>
+  <h2>Как это устроено</h2>
+  <div class="cards">
+    <div class="card">
+      <span class="n">1.33<span style="font-size:16px">%</span></span>
+      <div class="l">ложных срабатываний на правильном тексте</div>
+      <div class="s">у apertium-sah — 8.96%</div>
+    </div>
+    <div class="card">
+      <span class="n">96.5<span style="font-size:16px">%</span></span>
+      <div class="l">F1 на восстановлении ҕ ҥ ө һ ү</div>
+      <div class="s">с контекстной моделью</div>
+    </div>
+    <div class="card">
+      <span class="n">0.0016<span style="font-size:16px"> мс</span></span>
+      <div class="l">проверка одного слова</div>
+      <div class="s">у bashspell — 0.17–0.21 мс</div>
+    </div>
+    <div class="card">
+      <span class="n">8.2<span style="font-size:16px"> млн</span></span>
+      <div class="l">предложений в корпусе</div>
+      <div class="s">18 источников, 40 млн токенов</div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:22px">
+    Три слоя. <b>L0</b> чинит письмо: невидимые символы, чужие кириллические
+    буквы (ѳ→ө, ң→ҥ, ғ→ҕ), латинские гомоглифы внутри слова. <b>L1</b> — словарь
+    словоформ с поиском кандидатов по взвешенному расстоянию. <b>L2</b> —
+    посимвольный тэггер на 10.8 млн параметров, который решает по контексту,
+    «г» здесь или «ҕ».
+  </p>
+  <p class="note">
+    На этой странице работают L0 и L1: они не требуют ничего, кроме словаря.
+    Тэггер весит 43 МБ и живёт в Python-версии — с ним качество на
+    деноминализации поднимается с 93.1% до 96.5%.
+  </p>
+</section>
+
+<section>
+  <h2>Что показали измерения</h2>
+  <p class="note">
+    Проверка на отложенном наборе, который не участвовал в сборке словаря.
+    Метрики пословные, как в SAGE.
+  </p>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>Задача</th><th class="num">F1 словарь</th><th class="num">F1 + тэггер</th>
+      <th class="num">Детекция</th><th class="num">Ложные</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>чистый текст</td><td class="num">—</td><td class="num">—</td>
+          <td class="num">—</td><td class="num"><strong>1.33%</strong></td></tr>
+      <tr><td>набрано без якутской раскладки</td><td class="num">93.05%</td>
+          <td class="num"><strong>96.51%</strong></td><td class="num">99.44%</td><td class="num">1.51%</td></tr>
+      <tr><td>как пишут на практике</td><td class="num">92.78%</td>
+          <td class="num"><strong>95.87%</strong></td><td class="num">99.67%</td><td class="num">1.68%</td></tr>
+      <tr><td>опечатки поверх этого</td><td class="num">87.68%</td>
+          <td class="num"><strong>90.23%</strong></td><td class="num">96.13%</td><td class="num">1.46%</td></tr>
+      <tr><td>механические опечатки</td><td class="num"><strong>76.30%</strong></td>
+          <td class="num">76.00%</td><td class="num">86.39%</td><td class="num">1.35%</td></tr>
+      <tr><td>ошибки, добытые из корпуса</td><td class="num"><strong>67.15%</strong></td>
+          <td class="num">66.94%</td><td class="num">65.35%</td><td class="num">1.78%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note" style="margin-top:18px">
+    Последняя колонка важнее остальных. Спелчекер выключают не потому, что он
+    пропускает ошибки, а потому, что он подчёркивает правильные слова.
+  </p>
+</section>
+
+<section>
+  <h2>Три находки</h2>
+  <ul class="note">
+    <li>
+      <b>Мягкий знак вместо һ.</b> Самая частая реальная ошибка в вебе — не
+      опечатка, а <code>уьу</code>, <code>киьини</code>, <code>эьиги</code>: 997,
+      960 и 512 вхождений в корпусе. Мягкий знак стоит на русской раскладке и
+      похож на һ начертанием. В OCR тот же механизм даёт <code>ц</code> вместо
+      <code>ҥ</code>: <code>хацалас</code> → <code>хаҥалас</code>.
+    </li>
+    <li>
+      <b>Словарь загрязняется собственной систематической ошибкой.</b> Формы
+      <code>сана</code>, <code>киси</code>, <code>кун</code> попали в словарь,
+      потому что так пишут во всех источниках сразу — правило «подтверждено
+      двумя независимыми источниками» против этого бессильно. Отдельный фильтр
+      теней дал <b>+27.7 пункта F1</b> и обрушил долю ошибок, невидимых без
+      контекста, с 41.2% до 1.5%.
+    </li>
+    <li>
+      <b>Эталонные расшифровки ASR грязнее выхода модели.</b> В 50.9%
+      расхождений не является словом именно эталон, против 13.6% у гипотезы.
+      Аудит 8 417 расшифровок: 46% содержат орфографическую ошибку. Значит WER
+      в таких замерах завышен — модель штрафуют за правильно написанные слова.
+    </li>
+  </ul>
+</section>
+
+<footer>
+  <span>Словарь построен из корпуса; <code style="font-family:var(--mono)">apertium-sah</code> и <code style="font-family:var(--mono)">yakutmorph</code> в рантайме не используются.</span>
+  <a href="https://github.com/EgorovM/sakhaspell">github.com/EgorovM/sakhaspell</a>
+</footer>
+
+</div>
+
+<script type="module">
+import { SakhaSpell } from './sakhaspell.js';
+
+const $ = (id) => document.getElementById(id);
+const input = $('input'), backdrop = $('backdrop'), result = $('result');
+const status = $('status'), bar = $('bar'), fixBtn = $('fix');
+
+const SAMPLES = [
+  ['Без раскладки', 'Ого уорэгэ кисиэхэ сана кыагы биэрэр'],
+  ['Мягкий знак вместо һ', 'Биьиги эьиги туьунан уьу кэпсээтибит'],
+  ['Диграф нг', 'Мин огом онгор диэн эттэ, кун ортото буолла'],
+  ['Опечатки', 'Саха сирин олхтоохторо бу сайын үлэлээбитэрин туһунан кэпсээтилэр'],
+  ['Правильный текст', 'Саха сирин олохтоохторо бу сайын үлэлээбиттэрин туһунан кэпсээтилэр'],
+];
+
+let engine = null;
+let issues = [];
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function paint() {
+  let html = '', prev = 0;
+  for (const iss of issues) {
+    html += escapeHtml(input.value.slice(prev, iss.start));
+    html += '<mark>' + escapeHtml(iss.word) + '</mark>';
+    prev = iss.end;
+  }
+  html += escapeHtml(input.value.slice(prev));
+  backdrop.innerHTML = html + '\n';
+  backdrop.scrollTop = input.scrollTop;
+}
+
+function render() {
+  if (!issues.length) {
+    result.innerHTML = input.value.trim()
+      ? '<div class="empty">Ошибок не найдено.</div>' : '';
+    fixBtn.disabled = true;
+    return;
+  }
+  fixBtn.disabled = !issues.some((i) => i.suggestions.length);
+  const rows = issues.map((iss, i) => {
+    const chips = iss.suggestions.length
+      ? `<div class="chips">${iss.suggestions.map((s, j) =>
+          `<button class="chip${j ? '' : ' best'}" data-i="${i}" data-w="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+        ).join('')}</div>`
+      : '<span class="none">нет подходящих вариантов</span>';
+    return `<div class="issue">
+        <span class="was">${escapeHtml(iss.word)}</span>
+        <span class="arrow">→</span>
+        ${chips}
+        <span class="why">${iss.reason}</span>
+      </div>`;
+  }).join('');
+  result.innerHTML = `<div class="issues">${rows}</div>`;
+}
+
+function run() {
+  if (!engine) return;
+  const t0 = performance.now();
+  issues = engine.check(input.value);
+  const dt = performance.now() - t0;
+  const words = (input.value.match(/[Ѐ-ԯ]+/gu) || []).length;
+  status.textContent = words
+    ? `${words} слов · ${issues.length} ${plural(issues.length)} · ${dt.toFixed(1)} мс`
+    : '';
+  paint();
+  render();
+}
+
+function plural(n) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return 'ошибок';
+  if (b > 1 && b < 5) return 'ошибки';
+  if (b === 1) return 'ошибка';
+  return 'ошибок';
+}
+
+// применение одной подсказки
+result.addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  const iss = issues[+chip.dataset.i];
+  const w = chip.dataset.w;
+  input.value = input.value.slice(0, iss.start) + w + input.value.slice(iss.end);
+  run();
+  input.focus();
+});
+
+fixBtn.addEventListener('click', () => {
+  input.value = engine.correct(input.value);
+  run();
+  input.focus();
+});
+
+$('clear').addEventListener('click', () => {
+  input.value = '';
+  run();
+  input.focus();
+});
+
+input.addEventListener('input', debounce(run, 120));
+input.addEventListener('scroll', () => { backdrop.scrollTop = input.scrollTop; });
+
+function debounce(fn, ms) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+// примеры
+$('samples').innerHTML = SAMPLES.map(([label], i) =>
+  `<button data-i="${i}">${label}</button>`).join('');
+$('samples').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  input.value = SAMPLES[+b.dataset.i][1];
+  run();
+});
+
+// загрузка словаря
+(async () => {
+  bar.style.width = '25%';
+  try {
+    engine = await SakhaSpell.load('data');
+    bar.style.width = '100%';
+    setTimeout(() => { bar.style.width = '0'; }, 400);
+    $('dict').textContent =
+      `${engine.size.toLocaleString('ru')} словоформ · ${engine.shadows.size.toLocaleString('ru')} искажений`;
+    input.value = SAMPLES[0][1];
+    run();
+  } catch (err) {
+    bar.style.width = '0';
+    $('dict').textContent = 'не удалось загрузить словарь';
+    status.textContent = String(err.message || err);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+"""Тесты компонентов, не требующие корпуса.
+
+Проверяют то, что легко сломать незаметно: границы токенов, обратимость
+нормализации, выравнивание меток тэггера.
+
+    python -m pytest tests/ -q
+"""
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+import pytest
+
+from sakhaspell.errors import denormalize, restoration_variants
+from sakhaspell.fuzzy import Trie, sub_cost
+from sakhaspell.lexicon import Lexicon
+from sakhaspell.norm import fix_confusables, fix_mixed_script, normalize, strip_invisible
+from sakhaspell.tagger import apply_tags, make_tags
+from sakhaspell.tokenize import sentences, tokenize, words, sakha_letter_share
+
+
+# --- токенизация -------------------------------------------------------------
+def test_offsets_point_at_original_text():
+    s = "Оҕо, үөрэҕэ — киһиэхэ!"
+    for t in tokenize(s):
+        assert s[t.start:t.end] == t.text
+
+
+def test_hyphenated_compound_is_one_token():
+    ts = words("сайыҥҥыттан-күһүҥҥүттэн")
+    assert len(ts) == 1
+    assert ts[0].text == "сайыҥҥыттан-күһүҥҥүттэн"
+
+
+def test_token_kinds():
+    kinds = {t.text: t.kind for t in tokenize("Саха 1990-с Linux")}
+    assert kinds["Саха"] == "word"
+    assert kinds["Linux"] == "latin"
+    assert kinds["1990-с"] in ("number", "word")
+
+
+def test_abbreviation_does_not_split_sentence():
+    s = "Ол 1990 с. буолбута. Иккис этии."
+    assert len(sentences(s)) == 2
+
+
+def test_sakha_letter_share():
+    # в живом якутском тексте доля ҕҥөһү около 7.6%
+    assert 0.0 < sakha_letter_share("Оҕо үөрэҕэ киһиэхэ саҥа") < 0.4
+    assert sakha_letter_share("текст без якутских букв") == 0.0
+
+
+# --- нормализация ------------------------------------------------------------
+@pytest.mark.parametrize("bad,good", [
+    ("ѳс", "өс"), ("саңа", "саҥа"), ("аға", "аҕа"), ("ұс", "үс"), ("ӊ", "ҥ"),
+])
+def test_confusables_fixed(bad, good):
+    assert fix_confusables(bad) == good
+
+
+def test_confusables_preserve_length():
+    s = "ѳң ғұ ӊҋ"
+    assert len(fix_confusables(s)) == len(s)
+
+
+def test_invisible_removed_with_offset_map():
+    s = "оҕо­лор"
+    out, idx = strip_invisible(s)
+    assert out == "оҕолор"
+    assert all(s[i] == c for c, i in zip(out, idx))
+
+
+def test_latin_homoglyph_fixed_only_inside_cyrillic_word():
+    assert fix_mixed_script("Cаха") == "Саха"      # латинская C
+    assert fix_mixed_script("CD-ROM") == "CD-ROM"  # трогать нельзя
+
+
+def test_normalize_is_idempotent():
+    s = "Cаха­ сирэ ѳс саңа"
+    assert normalize(normalize(s)) == normalize(s)
+
+
+# --- модель ошибок -----------------------------------------------------------
+def test_denormalize_removes_special_letters():
+    out = denormalize("Оҕо үөрэҕэ киһиэхэ саҥа")
+    assert not any(c in "ҕҥөүһ" for c in out.lower())
+
+
+@pytest.mark.parametrize("wrong,right", [
+    ("ого", "оҕо"), ("киhи", "киһи"), ("уьу", "уһу"),
+    ("сана", "саҥа"), ("хацалас", "хаҥалас"), ("кор", "көр"),
+])
+def test_restoration_contains_correct_variant(wrong, right):
+    assert right in restoration_variants(wrong)
+
+
+def test_restoration_includes_input_unchanged():
+    assert "ого" in restoration_variants("ого")
+
+
+# --- поиск по расстоянию -----------------------------------------------------
+def test_cheap_substitutions_are_cheaper_than_typos():
+    assert sub_cost("г", "ҕ") < sub_cost("г", "б")
+    assert sub_cost("ь", "һ") < sub_cost("ь", "б")
+
+
+def test_trie_finds_within_cost():
+    t = Trie.from_freq({"оҕо": 100, "оҕолор": 50, "киһи": 90})
+    got = {c.form for c in t.search("ого", max_cost=100)}
+    assert "оҕо" in got
+
+
+def test_trie_contains():
+    t = Trie.from_freq({"оҕо": 1})
+    assert "оҕо" in t and "оҕол" not in t
+
+
+def test_transposition_costs_one_edit():
+    t = Trie.from_freq({"киһи": 10})
+    got = t.search("икһи", max_cost=100)
+    assert any(c.form == "киһи" for c in got)
+
+
+# --- метки тэггера -----------------------------------------------------------
+@pytest.mark.parametrize("src,tgt", [
+    ("ого", "оҕо"), ("киhи", "киһи"), ("уьу", "уһу"), ("санга", "саҥа"),
+    ("хацалас", "хаҥалас"), ("тонгус", "тоҥус"),
+    ("Ого уорэгэ", "Оҕо үөрэҕэ"),
+])
+def test_tags_roundtrip(src, tgt):
+    tags = make_tags(src, tgt)
+    assert tags is not None, f"не размечено: {src} -> {tgt}"
+    assert apply_tags(src, tags) == tgt
+
+
+def test_tags_reject_incompatible_pair():
+    # порча не сводится к восстановлению спецбукв — такую пару учить нельзя
+    assert make_tags("оҕо", "биэрэр") is None
+
+
+def test_tags_length_matches_source():
+    src, tgt = "Ого уорэгэ кисиэхэ", "Оҕо үөрэҕэ киһиэхэ"
+    assert len(make_tags(src, tgt)) == len(src)
+
+
+def test_clean_text_gets_all_keep():
+    s = "Оҕо үөрэҕэ"
+    tags = make_tags(s, s)
+    assert set(tags) == {0}
+
+
+# --- лексикон ----------------------------------------------------------------
+def test_lexicon_hyphen_parts():
+    lex = Lexicon(core={"оҕо": 10, "уруу": 10})
+    assert lex.check_form("оҕо-уруу").ok
+    assert not lex.check_form("оҕо-ххх").ok
+
+
+def test_lexicon_shadow_rejected():
+    lex = Lexicon(core={"саҥа": 100}, shadow={"сана": "саҥа"})
+    assert not lex.check_form("сана").ok
+    assert lex.check_form("саҥа").ok
+
+
+def test_lexicon_tail_needs_corroboration():
+    lex = Lexicon(core={}, tail={"редкое": 1}, other={"редкое": 5})
+    assert lex.check_form("редкое").ok
+    lex2 = Lexicon(core={}, tail={"опечатка": 1}, other={})
+    assert not lex2.check_form("опечатка").ok
+
+
+def test_numbers_and_latin_are_skipped():
+    lex = Lexicon(core={})
+    toks = {t.text: t for t in tokenize("2024 Linux")}
+    assert lex.check_token(toks["2024"]).ok
+    assert lex.check_token(toks["Linux"]).ok

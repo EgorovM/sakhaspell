@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.DS_Store
+.pytest_cache/
+
+# Промежуточные данные: пересобираются скриптами из корпуса.
+data/sent/
+data/bench/
+data/errors/
+data/asr_audit/
+data/lexicon/heldout.jsonl
+data/lexicon/only_other.tsv
+data/lexicon/*.json
+data/lexicon/demoted.txt
+data/char_inventory.tsv
+
+# В репозитории лежат сжатые .tsv.gz, распакованные не нужны.
+data/lexicon/core.tsv
+data/lexicon/tail.tsv
+data/lexicon/shadows.tsv
+
+# Чекпоинты модели. Тэггер обучается за 33 минуты на одной H200,
+# см. scripts/train_tagger.py
+runs/
