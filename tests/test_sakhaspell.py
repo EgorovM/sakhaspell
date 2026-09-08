@@ -237,3 +237,132 @@ def test_positional_rule():
 def test_cluster_rule_ignores_loanwords():
     assert cluster_violations("млрд")
     assert cluster_violations("оҕолор") == []
+
+
+# --- пользовательский словарь -------------------------------------------------
+from sakhaspell.userdict import UserDict
+
+
+def test_userdict_accepts_and_replaces(tmp_path):
+    ud = UserDict()
+    ud.add("Ньургуйаана")
+    ud.add_replacement("сахалыы", "саха тылынан")
+    assert ud.accepts("ньургуйаана")
+    assert ud.accepts("НЬУРГУЙААНА")
+    assert not ud.accepts("сахалыы")           # слово, которое велено править
+    assert ud.correction("сахалыы") == "саха тылынан"
+
+
+def test_userdict_roundtrip(tmp_path):
+    p = tmp_path / "ud.txt"
+    ud = UserDict()
+    ud.add("скайраннинг")
+    ud.add_replacement("неверно", "верно")
+    ud.save(p)
+    back = UserDict.load(p)
+    assert back.accept == ud.accept
+    assert back.replace == ud.replace
+
+
+def test_userdict_ignores_comments(tmp_path):
+    p = tmp_path / "ud.txt"
+    p.write_text("# комментарий\n\nслово\nа -> б\n", encoding="utf-8")
+    ud = UserDict.load(p)
+    assert ud.accept == {"слово"}
+    assert ud.replace == {"а": "б"}
+
+
+def test_userdict_suppresses_flag():
+    lex = Lexicon(core={"оҕо": 10})
+    from sakhaspell.checker import SpellChecker
+    ud = UserDict()
+    ud.add("калибулин")
+    ch = SpellChecker(lex, userdict=ud)
+    assert [i.token.text for i in ch.check("калибулин оҕо")] == []
+    assert [i.token.text for i in SpellChecker(lex).check("калибулин оҕо")] == ["калибулин"]
+
+
+# --- контекстная модель -------------------------------------------------------
+from sakhaspell.lm import BOS, BigramLM
+
+
+def _toy_lm() -> BigramLM:
+    uni = {"бу": 100, "сайын": 30, "ыйын": 60, "үлэлээбит": 20}
+    bi = {"бу": {"сайын": 25}, "сайын": {"үлэлээбит": 15}}
+    return BigramLM(uni, bi, sum(uni.values()))
+
+
+def test_lm_prefers_seen_bigram():
+    lm = _toy_lm()
+    # «бу сайын» в модели есть, «бу ыйын» нет — несмотря на то, что «ыйын»
+    # вдвое частотнее само по себе
+    assert lm.score("сайын", "бу") > lm.score("ыйын", "бу")
+
+
+def test_lm_falls_back_to_unigram():
+    lm = _toy_lm()
+    # без контекста побеждает частотное
+    assert lm.logp_unigram("ыйын") > lm.logp_unigram("сайын")
+    # неизвестное слово получает конечную, но малую вероятность
+    assert lm.logp_unigram("такогонет") < lm.logp_unigram("сайын")
+
+
+def test_lm_uses_right_context():
+    lm = _toy_lm()
+    with_right = lm.score("сайын", None, "үлэлээбит")
+    without = lm.score("сайын", None, None)
+    assert with_right != without
+
+
+def test_lm_decides_between_equally_cheap_candidates():
+    """Контекст решает там, где правки равны по цене.
+
+    Если один кандидат дешевле по расстоянию, цена правки перевешивает: так и
+    задумано, контекст не должен переставлять заметно более близкий вариант.
+    Поэтому кандидаты здесь равноудалены — обе правки по одной замене.
+    """
+    from sakhaspell.checker import SpellChecker
+    uni = {"бу": 100, "сайын": 30, "тайын": 60}
+    bi = {"бу": {"сайын": 25}}
+    lm = BigramLM(uni, bi, sum(uni.values()))
+    lex = Lexicon(core={"сайын": 30, "тайын": 60})
+
+    # без контекста побеждает частотное
+    assert SpellChecker(lex).suggest("байын")[0].form == "тайын"
+    # с контекстом «бу ___» — то, что встречалось после «бу»
+    smart = SpellChecker(lex, lm=lm)
+    assert smart.suggest("байын", "бу", None)[0].form == "сайын"
+
+
+def test_lm_does_not_override_cheaper_edit():
+    """Контекст не должен побеждать заметно более дешёвую правку."""
+    from sakhaspell.checker import SpellChecker
+    lex = Lexicon(core={"сайын": 30, "ыйын": 60})
+    smart = SpellChecker(lex, lm=_toy_lm())
+    # «ыйын» на одну замену соседних по раскладке букв, «сайын» — на вставку;
+    # контекст сдвигает оценку, но порядок не переворачивает
+    assert smart.suggest("сйын", "бу", None)[0].form == "ыйын"
+
+
+# --- правила: реестр ----------------------------------------------------------
+from sakhaspell.grammar import ALL_RULES, RULES, SAFE_RULES
+
+
+def test_rules_registry_complete():
+    assert len(RULES) == 8
+    assert set(SAFE_RULES) <= set(RULES)
+    assert set(ALL_RULES) == set(RULES)
+
+
+def test_final_rule_narrowed_to_ghe():
+    from sakhaspell.grammar import rule_final
+    # корпус показал, что «тыһ» — законное слово, а не нарушение
+    assert rule_final("тыһ") == []
+    assert rule_final("буоллаҕ")
+
+
+def test_soft_sign_rule_catches_real_error():
+    from sakhaspell.grammar import rule_soft_sign
+    assert rule_soft_sign("уьу")        # ь вместо һ — самая частая ошибка
+    assert rule_soft_sign("сылдьар") == []
+    assert rule_soft_sign("аньыы") == []

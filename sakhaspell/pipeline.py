@@ -20,6 +20,18 @@ from .checker import Issue, SpellChecker, Suggestion
 from .lexicon import Lexicon
 from .norm import normalize
 from .tokenize import Token, tokenize
+from .userdict import UserDict
+
+
+def _load_lm(path: str | pathlib.Path | None):
+    """Контекстная модель из пакета или из указанного каталога."""
+    from .lm import BigramLM
+    p = pathlib.Path(path) if path is not None else \
+        pathlib.Path(__file__).resolve().parent / "lm"
+    try:
+        return BigramLM.load(p)
+    except (FileNotFoundError, OSError):
+        return None
 
 
 @dataclass
@@ -37,9 +49,16 @@ class Pipeline:
     def __init__(self, lexicon_dir: str | pathlib.Path | None = None, *,
                  tagger_dir: str | pathlib.Path | None = None,
                  device: str = "cpu", max_suggestions: int = 5,
-                 tagger_threshold: float = 0.9) -> None:
+                 tagger_threshold: float = 0.9,
+                 userdict: UserDict | None = None,
+                 use_lm: bool = True,
+                 lm_dir: str | pathlib.Path | None = None) -> None:
         self.lex = Lexicon.load(lexicon_dir)
-        self.checker = SpellChecker(self.lex, max_suggestions=max_suggestions)
+        # Контекстная модель весит 7 МБ и грузится за секунду, поэтому она
+        # необязательна: без неё качество падает на 3–4 пункта, но старт быстрее.
+        lm = _load_lm(lm_dir) if use_lm else None
+        self.checker = SpellChecker(self.lex, max_suggestions=max_suggestions,
+                                    userdict=userdict, lm=lm)
         self.tagger = None
         self.vocab = None
         self.device = device
@@ -105,28 +124,30 @@ class Pipeline:
             else:
                 staged = src        # выравнивание не сошлось — тэггер не применяем
 
-        # лексикон работает по тексту после тэггера, но позиции нужны исходные
+        # Проверку ведёт сам чекер, а не копия его логики: иначе обходятся
+        # пользовательский словарь и контекстная модель. Раньше здесь стоял
+        # прямой вызов lex.check_token, и принудительные правки из словаря
+        # молча не применялись.
         a = [t for t in tokenize(src) if t.is_word]
         b = [t for t in tokenize(staged) if t.is_word]
         by_index = {i: t for i, t in enumerate(a)} if len(a) == len(b) else {}
+        at = {t.start: i for i, t in enumerate(b)}
         applied = {c.start for c in out}
-        for i, tb in enumerate(b):
-            v = self.lex.check_token(tb)
-            if v.ok:
+        for iss in self.checker.check(staged):
+            i = at.get(iss.token.start)
+            if i is None or not iss.suggestions:
                 continue
-            sug = self.checker.suggest(tb.text)
-            if not sug:
-                continue
-            ta = by_index.get(i, tb)
+            ta = by_index.get(i, iss.token)
             if ta.start in applied:
-                # тэггер уже правил это слово; лексикон уточняет результат
+                # тэггер уже правил это слово; чекер уточняет результат
                 for c in out:
                     if c.start == ta.start:
-                        c.after = sug[0].form
-                        c.alternatives = [s.form for s in sug[1:]]
+                        c.after = iss.suggestions[0].form
+                        c.alternatives = [s.form for s in iss.suggestions[1:]]
                         c.source = "tagger+lexicon"
                 continue
-            out.append(Correction(ta.start, ta.end, ta.text, sug[0].form,
-                                  "lexicon", [s.form for s in sug[1:]]))
+            out.append(Correction(ta.start, ta.end, ta.text,
+                                  iss.suggestions[0].form, iss.reason,
+                                  [s.form for s in iss.suggestions[1:]]))
         out.sort(key=lambda c: c.start)
         return out

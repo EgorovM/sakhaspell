@@ -3,6 +3,8 @@
     sakhaspell check "Ого уорэгэ кисиэхэ сана кыагы биэрэр"
     sakhaspell fix --file статья.txt --in-place
     sakhaspell repl
+    sakhaspell dict add Ньургуйаана     # своё слово, больше не подчёркивать
+    sakhaspell dict list
 
 Словарь встроен в пакет, указывать его не нужно. Флаг --lexicon пригодится,
 только если собран свой.
@@ -15,6 +17,7 @@ import pathlib
 import sys
 
 from .pipeline import Pipeline
+from .userdict import UserDict, default_path
 
 
 def _force_utf8() -> None:
@@ -32,7 +35,9 @@ def _force_utf8() -> None:
 
 
 def _pipeline(args) -> Pipeline:
-    return Pipeline(args.lexicon, tagger_dir=args.tagger, device=args.device)
+    return Pipeline(args.lexicon, tagger_dir=args.tagger, device=args.device,
+                    userdict=UserDict.load(args.userdict),
+                    use_lm=not args.no_lm)
 
 
 def _read_input(args) -> str:
@@ -76,6 +81,50 @@ def cmd_fix(args) -> int:
     return 0
 
 
+def cmd_dict(args) -> int:
+    """Пользовательский словарь: имена, топонимы, термины.
+
+    В остатке ложных срабатываний почти всё — имена и термины, которых корпус
+    знать не может. Кнопка «это слово правильное» решает вопрос навсегда.
+    """
+    ud = UserDict.load(args.userdict)
+    path = ud.path or default_path()
+
+    if args.action == "list":
+        if not ud:
+            print(f"словарь пуст ({path})")
+            return 0
+        for w in sorted(ud.accept):
+            print(w)
+        for a, b in sorted(ud.replace.items()):
+            print(f"{a} -> {b}")
+        return 0
+
+    if args.action == "path":
+        print(path)
+        return 0
+
+    if not args.words:
+        print("укажите слова", file=sys.stderr)
+        return 2
+
+    if args.action == "add":
+        for w in args.words:
+            if "->" in w:
+                a, b = w.split("->", 1)
+                ud.add_replacement(a, b)
+            else:
+                ud.add(w)
+    elif args.action == "remove":
+        for w in args.words:
+            ud.remove(w)
+            ud.replace.pop(w.lower(), None)
+
+    p = ud.save(args.userdict)
+    print(f"словарь: {len(ud)} записей -> {p}", file=sys.stderr)
+    return 0
+
+
 def cmd_repl(args) -> int:
     p = _pipeline(args)
     print("ввод — строка текста, выход — Ctrl-D")
@@ -103,20 +152,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--no-tagger", action="store_true",
                     help="только словарный слой, без нейросети")
+    ap.add_argument("--no-lm", action="store_true",
+                    help="без контекстной модели: быстрее старт, ниже качество")
+    ap.add_argument("--userdict", default=None,
+                    help="файл пользовательского словаря")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     for name, fn, doc in (("check", cmd_check, "показать ошибки"),
                           ("fix", cmd_fix, "исправить текст"),
                           ("repl", cmd_repl, "интерактивный режим")):
-        s = sub.add_parser(name, help=doc)
-        s.set_defaults(fn=fn)
+        sp = sub.add_parser(name, help=doc)
+        sp.set_defaults(fn=fn)
         if name != "repl":
-            s.add_argument("text", nargs="*", help="текст; иначе --file или stdin")
-            s.add_argument("--file", help="файл со входным текстом")
+            sp.add_argument("text", nargs="*", help="текст; иначе --file или stdin")
+            sp.add_argument("--file", help="файл со входным текстом")
         if name == "check":
-            s.add_argument("--json", action="store_true")
+            sp.add_argument("--json", action="store_true")
         if name == "fix":
-            s.add_argument("--in-place", action="store_true")
+            sp.add_argument("--in-place", action="store_true")
+
+    sd = sub.add_parser("dict", help="пользовательский словарь")
+    sd.set_defaults(fn=cmd_dict)
+    sd.add_argument("action", choices=["add", "remove", "list", "path"])
+    sd.add_argument("words", nargs="*",
+                    help="слова; для замены «неверно->верно»")
 
     _force_utf8()
     args = ap.parse_args(argv)

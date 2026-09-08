@@ -1,0 +1,7 @@
+{
+  "tokens": 46892805,
+  "vocab": 898628,
+  "bigrams_all": 14588644,
+  "bigrams_kept": 963436,
+  "min_count": 5
+}

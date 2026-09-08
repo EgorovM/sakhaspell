@@ -98,6 +98,8 @@ button {
 button:hover:not(:disabled) { border-color: var(--ink-faint); }
 button:disabled { opacity: .4; cursor: default; }
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+button.loading { opacity: .6; cursor: progress; }
 button.primary:hover:not(:disabled) { filter: brightness(1.08); }
 
 /* --- всплывающие подсказки --- */
@@ -171,6 +173,7 @@ footer a:hover { color: var(--accent); }
   </div>
   <div class="toolbar">
     <span id="count"></span>
+    <button id="ai" title="Контекстная модель, 11 МБ. Понимает, где «г», а где «ҕ», по смыслу фразы">Умный режим</button>
     <button id="copy">Скопировать</button>
     <button id="fix" class="primary" disabled>Исправить всё</button>
   </div>
@@ -192,6 +195,7 @@ footer a:hover { color: var(--accent); }
 
 <script type="module">
 import { SakhaSpell } from './sakhaspell.js';
+import { Tagger } from './tagger.js';
 
 const $ = (id) => document.getElementById(id);
 const input = $('input'), backdrop = $('backdrop'), pop = $('pop');
@@ -204,6 +208,7 @@ const SAMPLES = [
 ];
 
 let engine = null, issues = [], active = -1;
+let tagger = null, taggerOn = false;
 
 const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
@@ -218,8 +223,18 @@ function paint() {
   backdrop.scrollTop = input.scrollTop;
 }
 
-function run() {
+async function run() {
   if (!engine) return;
+  // Умный режим: сперва контекстная модель возвращает якутские буквы, затем
+  // словарь ищет опечатки в уже исправленном тексте.
+  if (taggerOn && tagger) {
+    const fixed = await tagger.restore(input.value);
+    if (fixed !== input.value && fixed.length === input.value.length) {
+      const at = input.selectionStart;
+      input.value = fixed;
+      try { input.setSelectionRange(at, at); } catch { /* поле не в фокусе */ }
+    }
+  }
   issues = engine.check(input.value);
   active = -1;
   hidePop();
@@ -309,6 +324,33 @@ fixBtn.addEventListener('click', () => {
   input.value = engine.correct(input.value);
   run();
   input.focus();
+});
+
+$('ai').addEventListener('click', async (e) => {
+  const b = e.target;
+  if (tagger) {                       // уже загружена — просто переключаем
+    taggerOn = !taggerOn;
+    b.classList.toggle('on', taggerOn);
+    run();
+    return;
+  }
+  b.classList.add('loading');
+  b.textContent = 'Загрузка 0%';
+  try {
+    tagger = await Tagger.load('model', (p) => {
+      b.textContent = `Загрузка ${Math.round(p * 100)}%`;
+    });
+    taggerOn = true;
+    b.classList.remove('loading');
+    b.classList.add('on');
+    b.textContent = 'Умный режим';
+    run();
+  } catch (err) {
+    b.classList.remove('loading');
+    b.textContent = 'Не загрузилось';
+    console.error(err);
+    setTimeout(() => { b.textContent = 'Умный режим'; }, 2500);
+  }
 });
 
 $('copy').addEventListener('click', async (e) => {

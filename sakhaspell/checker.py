@@ -29,14 +29,21 @@ from .errors import restoration_variants
 from .fuzzy import Trie
 from .grammar import SAFE_RULES, harmony_violations, violations
 from .lexicon import Lexicon
+from .lm import BOS, EOS, BigramLM
 from .norm import normalize
 from .tokenize import Token, tokenize
+from .userdict import UserDict
 
 # Во сколько сотых оценивается разница в частоте на порядок. Подобрано так, чтобы
 # правка ценой 0.35 (замена ҕ→г) не перебивалась ничем, а правки одной цены
 # разводились по частоте.
 FREQ_WEIGHT = 12
 MAX_SEARCH_COST = 220
+# Вес контекстной модели при ранжировании. Логарифм вероятности умножается на
+# него и вычитается из цены, как раньше вычиталась частота. Подобран на dev
+# (E18): слишком малый не переставляет ничего, слишком большой позволяет
+# контексту победить правку вдвое меньшей цены.
+LM_WEIGHT = 22
 # Штраф кандидату, нарушающему гармонию гласных. На деноминализации гармонию
 # нарушает 33.6% испорченных слов против 0.4% правильных (E15), так что признак
 # сильный. Величина в тех же сотых, что и цена правки: 40 — меньше одной обычной
@@ -54,13 +61,16 @@ class Suggestion:
     form: str
     cost: int
     freq: int
-    kind: str          # shadow | restore | fuzzy
+    kind: str          # shadow | restore | fuzzy | grammar | userdict
     penalty: int = 0   # штраф за нарушение правил грамматики
+    context: float | None = None   # логарифм вероятности в контексте
 
     @property
     def score(self) -> float:
-        return (self.cost + self.penalty
-                - FREQ_WEIGHT * math.log10(max(self.freq, 1)))
+        base = self.cost + self.penalty
+        if self.context is not None:
+            return base - LM_WEIGHT * self.context
+        return base - FREQ_WEIGHT * math.log10(max(self.freq, 1))
 
 
 @dataclass
@@ -78,12 +88,20 @@ class SpellChecker:
     def __init__(self, lexicon: Lexicon, *, max_suggestions: int = 5,
                  use_tail: bool = True, grammar: bool = True,
                  grammar_penalty: int = GRAMMAR_PENALTY,
-                 flag_rules: tuple[str, ...] | None = None) -> None:
+                 flag_rules: tuple[str, ...] | None = None,
+                 userdict: UserDict | None = None,
+                 lm: BigramLM | None = None) -> None:
         self.lex = lexicon
         self.max_suggestions = max_suggestions
         self.use_tail = use_tail
         self.grammar = grammar
         self.grammar_penalty = grammar_penalty
+        # Пользовательский словарь идёт впереди всего: человек знает про свои
+        # имена и термины больше, чем корпус и грамматика вместе.
+        self.userdict = userdict or UserDict()
+        # Контекстная модель. Без неё ранжирование работает как раньше, по
+        # частоте слова; с ней частота заменяется вероятностью в контексте.
+        self.lm = lm
         # Помечать слово, которое словарь принял, но которое нарушает правила.
         # Единственное применение правил, способное поймать ошибку, невидимую
         # для словаря, — и оно не окупается, поэтому выключено по умолчанию.
@@ -106,9 +124,15 @@ class SpellChecker:
         self.trie = Trie.from_freq(lexicon.core)
 
     # --- одно слово ---------------------------------------------------------
-    def suggest(self, word: str) -> list[Suggestion]:
+    def suggest(self, word: str, left: str | None = None,
+                right: str | None = None) -> list[Suggestion]:
         low = word.lower()
         out: dict[str, Suggestion] = {}
+
+        # 0a. правка, заданная пользователем, — сильнее любой другой
+        forced = self.userdict.correction(low)
+        if forced:
+            return _restore_case(word, [Suggestion(forced, 0, 10 ** 9, "userdict")])
 
         # 0. известная тень искажения — исправление знаем точно
         origin = self.lex.shadow.get(low)
@@ -155,23 +179,71 @@ class SpellChecker:
                 if harmony_violations(s.form):
                     s.penalty = self.grammar_penalty
 
+        if self.lm is not None and (left or right):
+            for s in out.values():
+                s.context = self.lm.score(s.form, left, right)
+
         res = sorted(out.values(), key=lambda s: s.score)
         return _restore_case(word, res)[: self.max_suggestions]
+
+    def _accepted_by_user(self, word: str) -> bool:
+        """Принято пользовательским словарём — целиком или по частям.
+
+        Части дефисного сложения проверяются в обоих словарях сразу: человек
+        добавил «скайраннинг», и «скайраннинг-куонкурус» должно пройти, хотя
+        вторая часть известна только основному лексикону.
+        """
+        if not self.userdict:
+            return False
+        if self.userdict.accepts(word):
+            return True
+        w = word.lower()
+        if "-" not in w:
+            return False
+        parts = [p for p in w.split("-") if p]
+        if len(parts) < 2:
+            return False
+        return (any(self.userdict.accepts(p) for p in parts)
+                and all(self.userdict.accepts(p)
+                        or self.lex.check_form(p, use_hyphen=False).ok
+                        for p in parts))
 
     # --- текст --------------------------------------------------------------
     def check(self, text: str) -> list[Issue]:
         text = normalize(text)
         issues: list[Issue] = []
-        for t in tokenize(text):
+        toks = list(tokenize(text))
+        # Соседние СЛОВА, а не токены: между словами могут стоять числа и
+        # латиница, и для контекста они бесполезны.
+        words = [i for i, t in enumerate(toks) if t.is_word]
+        pos = {i: k for k, i in enumerate(words)}
+        for ti, t in enumerate(toks):
+            if t.is_word:
+                if self.userdict.correction(t.text.lower()):
+                    issues.append(Issue(t, self.suggest(t.text), "userdict"))
+                    continue
+                if self._accepted_by_user(t.text):
+                    continue
             v = self.lex.check_token(t, use_tail=self.use_tail)
             if v.ok:
                 if not (self.flag_rules and t.is_word
                         and violations(t.text, self.flag_rules)):
                     continue
-                issues.append(Issue(t, self.suggest(t.text), "grammar"))
+                issues.append(Issue(t, self._suggest_at(toks, words, pos, ti), "grammar"))
                 continue
-            issues.append(Issue(t, self.suggest(t.text), v.reason))
+            issues.append(Issue(t, self._suggest_at(toks, words, pos, ti), v.reason))
         return issues
+
+    def _suggest_at(self, toks, words, pos, ti) -> list[Suggestion]:
+        """Подсказки для токена с учётом соседних слов."""
+        t = toks[ti]
+        left = right = None
+        if self.lm is not None and ti in pos:
+            k = pos[ti]
+            left = toks[words[k - 1]].text.lower() if k > 0 else BOS
+            right = (toks[words[k + 1]].text.lower()
+                     if k + 1 < len(words) else EOS)
+        return self.suggest(t.text, left, right)
 
     def correct(self, text: str) -> str:
         text = normalize(text)
