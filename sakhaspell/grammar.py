@@ -1,44 +1,42 @@
 """Правила якутской фонетики и орфографии из грамматики.
 
-Всё, что здесь описано, взято из грамматических источников, а не выведено из
-корпуса. Это принципиально: остальные слои проекта построены на статистике, и
-интересно ровно то, добавляет ли книжное знание что-то поверх неё.
+Всё здесь взято из грамматических источников, а не выведено из корпуса. Это
+принципиально: остальные слои проекта построены на статистике, и проверяется
+ровно то, добавляет ли книжное знание что-то поверх неё.
 
-Гармония гласных (сингармонизм) в якутском строится на трёх признаках: ряд
-(передний/задний), огубленность и степень открытости. Таблица сочетаемости взята
-в готовом виде, потому что вывести её из признаков не получается — там есть
-несимметричные места, вроде того, что после «о» допускается «у», но не «а»:
+Правила оформлены реестром `RULES`, чтобы замер (`scripts/check_grammar_rules.py`)
+прогонялся по всем сразу и было видно, какое из них корпус подтверждает, а какое
+опровергает. Грамматики упрощают, и часть формулировок на 300 тысячах реальных
+словоформ не держится — см. E17 в docs/experiments.md.
 
-    после а аа ы ыы ыа  →  а аа ы ыы ыа
-    после э ээ и ии иэ  →  э ээ и ии иэ
-    после о оо          →  о оо у уу уо
-    после ө өө          →  ө өө ү үү үө
-    после у уу уо       →  у уу а аа уо
-    после ү үү үө       →  ү үү э ээ үө
-
-Гармония действует только в исконных словах. Русские заимствования её нарушают
-законно и массово, поэтому слово с буквой, которая в якутском употребляется лишь
-в заимствованиях (в, е, ё, ж, з, ф, ц, ш, щ, ъ, ю, я), из проверки исключается.
-
-Позиционные ограничения на согласные проверены по корпусу и приведены к тому,
-что подтверждается данными, — см. `scripts/check_grammar_rules.py` и E15
-в docs/experiments.md.
+Источники: Убрятова и др. «Грамматика современного якутского литературного
+языка» (1982), описание фонетики в русской Википедии и на wiki.sakhatyla.ru,
+Ivanova, Washington, Tyers «A Free/Open-Source Morphological Analyser and
+Generator for Sakha» (LREC 2022).
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+from typing import Callable
 
-# --- гласные -----------------------------------------------------------------
+# --- инвентарь ---------------------------------------------------------------
 SHORT = "аыоуэиөү"
 LONG = ("аа", "ыы", "оо", "уу", "ээ", "ии", "өө", "үү")
 DIPHTHONGS = ("ыа", "уо", "иэ", "үө")
-VOWEL_CHARS = set(SHORT) | set("еёюя")     # русские гласные для опознания заимствований
-
-# Ядро слога: долгота и дифтонг — единицы, а не две гласные подряд.
 NUCLEI = set(SHORT) | set(LONG) | set(DIPHTHONGS)
 
-# Таблица сочетаемости. Ключ — предыдущее ядро, значение — что за ним допустимо.
+CONSONANTS = set("бвгҕджзйклмнҥпрсһтфхцчшщ")
+RU_VOWELS = set("еёюя")
+
+# Буквы, которые в якутском письме встречаются только в русских заимствованиях.
+# Слово с любой из них живёт по русским правилам, и требовать от него якутских
+# закономерностей нельзя.
+LOAN_LETTERS = set("вежзфцшщъюяё")
+
+# --- гармония гласных --------------------------------------------------------
+# Таблица сочетаемости взята готовой, а не выведена из признаков: вывести
+# не получается, там есть несимметричные места — после «о» допускается «у»,
+# но не «а», а после «у» наоборот «а», но не «ы».
 _GROUPS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("а", "аа", "ы", "ыы", "ыа"): ("а", "аа", "ы", "ыы", "ыа"),
     ("э", "ээ", "и", "ии", "иэ"): ("э", "ээ", "и", "ии", "иэ"),
@@ -52,27 +50,37 @@ for _keys, _vals in _GROUPS.items():
     for _k in _keys:
         FOLLOWS[_k] = frozenset(_vals)
 
-# --- согласные ---------------------------------------------------------------
-CONSONANTS = set("бвгҕджзйклмнҥпрсһтфхцчшщ")
-
-# Буквы, которые в якутском письме встречаются только в русских заимствованиях.
-# Слово с любой из них не подчиняется гармонии, и требовать её от него нельзя.
-LOAN_LETTERS = set("вежзфцшщъюяё")
-
-# Слово не начинается с этих букв. По грамматике сюда же относят «г» и «п»,
-# но корпус их у начала слова показывает, поэтому в правило они не вошли.
+# --- позиционные ограничения -------------------------------------------------
+# Согласные, с которых не начинается якутское слово.
 NO_INITIAL = set("ҕҥй")
-
-WORD_RE = re.compile(r"[а-яёa-zA-ZҔҕҤҥӨөҺһҮү-]+")
+# Согласные, на которые якутское слово не оканчивается.
+#
+# Грамматика называет здесь б, г, ҕ, д, һ, ч. Корпус подтверждает только ҕ
+# (10 форм, 53 вхождения — обрывки слов). Остальное правило опровергает:
+# на «һ» оканчиваются законные «тыһ» (14 753 вхождения), «нэһ», «бөһ», «баһ»,
+# а на б/г/д/ч — заимствования и аббревиатуры («млрд», «психолог», «куб»,
+# «ильич»), которые исконной фонетике не подчиняются. См. E17.
+NO_FINAL = set("ҕ")
+# Сочетания двух согласных, допустимые на конце слова.
+FINAL_CLUSTERS = {"лт", "рт", "нт", "ст", "кт", "мп", "нк"}
 
 
 @dataclass(frozen=True, slots=True)
 class Violation:
-    kind: str          # harmony | initial | cluster | vowelless
-    position: int      # позиция в слове
+    rule: str
+    position: int
     detail: str
 
+    def __repr__(self) -> str:      # pragma: no cover
+        return f"{self.rule}@{self.position}:{self.detail}"
 
+    # обратная совместимость: раньше поле называлось kind
+    @property
+    def kind(self) -> str:
+        return self.rule
+
+
+# --- разбор ------------------------------------------------------------------
 def parse_nuclei(word: str) -> list[tuple[int, str]]:
     """Ядра слогов в порядке следования: (позиция, ядро).
 
@@ -101,73 +109,195 @@ def is_loanword(word: str) -> bool:
     return any(c in LOAN_LETTERS for c in word.lower())
 
 
-def harmony_violations(word: str) -> list[Violation]:
-    """Нарушения гармонии гласных.
+def _parts(word: str) -> list[tuple[int, str]]:
+    """Части дефисного сложения с их смещениями.
 
-    Проверяется каждая часть дефисного сложения отдельно. Гармония действует
-    внутри слова, а через дефис ряд меняется законно: «дьон-сэргэ» (о→э),
-    «күүс-көмө» (үү→ө), «дьиэ-уот» (иэ→уо) — всё это правильные слова, и они
-    попадали в нарушители, пока проверка шла по всей строке целиком.
-
-    Для заимствований возвращается пусто: они гармонии не подчиняются.
+    Правила действуют внутри слова. Через дефис ряд меняется законно
+    («дьон-сэргэ», «күүс-көмө»), и проверять сложение целиком нельзя.
     """
+    out, off = [], 0
+    for p in word.lower().split("-"):
+        if p:
+            out.append((off, p))
+        off += len(p) + 1
+    return out
+
+
+# --- правила -----------------------------------------------------------------
+def rule_harmony(word: str) -> list[Violation]:
+    """Гармония гласных: нёбная и губная одной таблицей сочетаемости."""
     if is_loanword(word):
         return []
-    out: list[Violation] = []
-    offset = 0
-    for part in word.lower().split("-"):
+    out = []
+    for off, part in _parts(word):
         nuclei = parse_nuclei(part)
         for (_, prev), (pos, cur) in zip(nuclei, nuclei[1:]):
             allowed = FOLLOWS.get(prev)
             if allowed is not None and cur not in allowed:
-                out.append(Violation("harmony", offset + pos, f"{prev}→{cur}"))
-        offset += len(part) + 1
+                out.append(Violation("harmony", off + pos, f"{prev}→{cur}"))
     return out
 
 
-def positional_violations(word: str) -> list[Violation]:
-    """Позиционные ограничения на согласные."""
-    w = word.lower().strip("-")
-    if not w:
-        return []
-    out: list[Violation] = []
-    if w[0] in NO_INITIAL:
-        out.append(Violation("initial", 0, f"слово на «{w[0]}»"))
-    return out
+def rule_vowel_pairs(word: str) -> list[Violation]:
+    """Сочетания гласных: только 8 долгот и 4 дифтонга.
 
-
-def cluster_violations(word: str, max_run: int = 3) -> list[Violation]:
-    """Стечения согласных. В исконных словах больше двух подряд не бывает;
-    порог здесь мягче на единицу, потому что диграфы «дь» и «нь» на письме
-    выглядят как два согласных и раздувают любое стечение."""
+    Любая другая пара разных гласных подряд в исконном слове невозможна:
+    «аи», «оэ», «уы» не бывают.
+    """
     if is_loanword(word):
         return []
-    out: list[Violation] = []
-    run, start = 0, 0
-    for i, c in enumerate(word.lower() + " "):
-        if c in CONSONANTS or c == "ь":
-            if run == 0:
-                start = i
-            run += 1
-        else:
-            if run > max_run:
-                out.append(Violation("cluster", start, word[start:start + run]))
-            run = 0
+    out = []
+    for off, part in _parts(word):
+        i = 0
+        while i + 1 < len(part):
+            a, b = part[i], part[i + 1]
+            if a in SHORT and b in SHORT:
+                pair = a + b
+                if pair not in LONG and pair not in DIPHTHONGS:
+                    out.append(Violation("vowel_pairs", off + i, pair))
+                    i += 2
+                    continue
+                i += 2
+                continue
+            i += 1
     return out
 
 
-def violations(word: str, *, harmony: bool = True, positional: bool = True,
-               clusters: bool = True) -> list[Violation]:
-    """Все нарушения правил в слове."""
-    out: list[Violation] = []
-    if harmony:
-        out += harmony_violations(word)
-    if positional:
-        out += positional_violations(word)
-    if clusters:
-        out += cluster_violations(word)
+def rule_initial(word: str) -> list[Violation]:
+    """Слово не начинается на ҕ, ҥ, й."""
+    out = []
+    for off, part in _parts(word):
+        if part and part[0] in NO_INITIAL:
+            out.append(Violation("initial", off, f"слово на «{part[0]}»"))
     return out
 
 
-def is_wellformed(word: str, **kw) -> bool:
-    return not violations(word, **kw)
+def rule_final(word: str) -> list[Violation]:
+    """Слово не оканчивается на звонкие б, г, ҕ, д, ж и на һ, ч."""
+    if is_loanword(word):
+        return []
+    out = []
+    for off, part in _parts(word):
+        if part and part[-1] in NO_FINAL:
+            out.append(Violation("final", off + len(part) - 1,
+                                 f"слово на «{part[-1]}»"))
+    return out
+
+
+def rule_clusters(word: str, max_run: int = 2) -> list[Violation]:
+    """В исконном слове не бывает более двух согласных подряд.
+
+    Диграфы «дь» и «нь» на письме выглядят как согласный плюс мягкий знак,
+    поэтому перед подсчётом они схлопываются в один символ — иначе «сылдьар»
+    даст мнимое стечение из трёх.
+    """
+    if is_loanword(word):
+        return []
+    out = []
+    for off, part in _parts(word):
+        collapsed = part.replace("дь", "д").replace("нь", "н")
+        run, start = 0, 0
+        for i, c in enumerate(collapsed + " "):
+            if c in CONSONANTS:
+                if run == 0:
+                    start = i
+                run += 1
+            else:
+                if run > max_run:
+                    out.append(Violation("clusters", off + start,
+                                         collapsed[start:start + run]))
+                run = 0
+    return out
+
+
+def rule_final_cluster(word: str) -> list[Violation]:
+    """На конце слова допустимы лишь отдельные сочетания двух согласных."""
+    if is_loanword(word):
+        return []
+    out = []
+    for off, part in _parts(word):
+        collapsed = part.replace("дь", "д").replace("нь", "н")
+        tail = ""
+        for c in reversed(collapsed):
+            if c in CONSONANTS:
+                tail = c + tail
+            else:
+                break
+        if len(tail) >= 2 and tail[-2:] not in FINAL_CLUSTERS:
+            out.append(Violation("final_cluster",
+                                 off + len(collapsed) - len(tail), tail))
+    return out
+
+
+def rule_soft_sign(word: str) -> list[Violation]:
+    """Мягкий знак употребляется только в диграфах «дь» и «нь».
+
+    Это правило прицельно бьёт по самой частой реальной ошибке якутского письма:
+    «ь» вместо «һ» (уьу, киьини, эьиги — см. E4).
+    """
+    if is_loanword(word):
+        return []
+    out = []
+    w = word.lower()
+    for i, c in enumerate(w):
+        if c == "ь" and (i == 0 or w[i - 1] not in "дн"):
+            out.append(Violation("soft_sign", i, "ь не после д/н"))
+    return out
+
+
+def rule_triple_letter(word: str) -> list[Violation]:
+    """Один и тот же гласный не идёт трижды подряд: долгота — это ровно два."""
+    out = []
+    w = word.lower()
+    for i in range(len(w) - 2):
+        if w[i] == w[i + 1] == w[i + 2] and w[i] in SHORT:
+            out.append(Violation("triple_letter", i, w[i] * 3))
+    return out
+
+
+RULES: dict[str, Callable[[str], list[Violation]]] = {
+    "гармония гласных": rule_harmony,
+    "сочетания гласных": rule_vowel_pairs,
+    "начало слова": rule_initial,
+    "конец слова": rule_final,
+    "стечение согласных": rule_clusters,
+    "стечение на конце": rule_final_cluster,
+    "мягкий знак": rule_soft_sign,
+    "тройная гласная": rule_triple_letter,
+}
+
+# Дешёвые правила: срабатывают на правильной форме в 0.2–0.3% случаев против
+# 1.1–1.4% у гармонии, а ловят при этом больше неё (E17). Именно ими можно
+# помечать слово, которое словарь принял.
+SAFE_RULES = ("начало слова", "конец слова", "мягкий знак",
+              "тройная гласная", "стечение на конце")
+
+# Полный набор. Ловит вдвое больше, но и цена вдвое выше — годится там, где
+# важнее не пропустить ошибку, чем не потревожить пользователя.
+ALL_RULES = tuple(RULES)
+
+# Набор по умолчанию для `violations()` и `is_wellformed()` — полный: это
+# справочная функция, и урезать её нет причин. На пометку слов в спелчекере
+# правила по умолчанию НЕ влияют, см. SpellChecker(flag_rules=...).
+DEFAULT_RULES = ALL_RULES
+
+
+def violations(word: str, rules: tuple[str, ...] = DEFAULT_RULES) -> list[Violation]:
+    """Все нарушения выбранных правил."""
+    out: list[Violation] = []
+    for name in rules:
+        out += RULES[name](word)
+    return out
+
+
+def is_wellformed(word: str, rules: tuple[str, ...] = DEFAULT_RULES) -> bool:
+    return not violations(word, rules)
+
+
+# --- обратная совместимость с 0.2.0 -----------------------------------------
+harmony_violations = rule_harmony
+positional_violations = rule_initial
+
+
+def cluster_violations(word: str, max_run: int = 2) -> list[Violation]:
+    return rule_clusters(word, max_run)

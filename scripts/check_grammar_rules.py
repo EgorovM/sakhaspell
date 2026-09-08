@@ -1,113 +1,132 @@
-"""Проверка книжных правил на корпусе.
+"""Проверка книжных правил на корпусе — по каждому правилу отдельно.
 
-Правило из грамматики полезно ровно настолько, насколько оно верно на реальном
-языке и настолько же отличает правильное слово от ошибочного. Оба свойства
-меряются здесь, до того как правило куда-то встраивается.
+Правило полезно, если выполняются два условия, и оба надо мерить порознь:
 
-  1. Согласие с корпусом. Сколько форм из ядра лексикона — то есть заведомо
-     правильных слов — нарушают правило. Много нарушений означает, что правило
-     сформулировано слишком узко, а не что корпус плох.
-  2. Различающая сила. Сколько нарушений у правильных форм против ошибочных,
-     добытых в E4. Правило, которое одинаково срабатывает на тех и на других,
+  1. Согласие с корпусом. Сколько заведомо правильных форм из ядра лексикона
+     его нарушают. Много нарушений означает, что правило сформулировано в
+     грамматике слишком широко, а не что корпус плох.
+  2. Добавка сверх словаря. Сколько ошибок бенчмарка правило ловит из тех,
+     которые лексикон и так не принимает. Правило, дублирующее словарь,
      бесполезно, каким бы верным оно ни было.
 
-    python scripts/check_grammar_rules.py --lexicon sakhaspell/data \
-        --errors data/errors
+Второй пункт — главный. В E15 выяснилось, что гармония гласных на
+деноминализации не добавляет ничего: из 850 дисгармоничных слов лексикон
+отвергает все 850. Здесь тот же вопрос задаётся каждому правилу.
+
+    /usr/bin/python3 scripts/check_grammar_rules.py --lexicon data/lexicon \
+        --bench data/bench --errors data/errors
 """
 import argparse, collections, json, pathlib, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from sakhaspell.grammar import (cluster_violations, harmony_violations, is_loanword,
-                                parse_nuclei, positional_violations)
+from sakhaspell.grammar import RULES, is_loanword
 from sakhaspell.lexicon import Lexicon
+from sakhaspell.norm import normalize
+from sakhaspell.tokenize import tokenize
 
-RULES = {
-    "гармония гласных": harmony_violations,
-    "начало слова": positional_violations,
-    "стечение согласных": cluster_violations,
-}
-
-
-def rate(forms, fn, weights=None) -> tuple[float, collections.Counter]:
-    """Доля форм с нарушением. С весами — доля токенов, без — доля типов."""
-    bad = tot = 0
-    examples = collections.Counter()
-    for w in forms:
-        n = weights.get(w, 1) if weights else 1
-        tot += n
-        v = fn(w)
-        if v:
-            bad += n
-            if len(examples) < 5000:
-                examples[f"{w} ({v[0].detail})"] += n
-    return bad / max(tot, 1), examples
+TASKS = ("denorm_mixed", "typo", "real", "mixed")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lexicon", type=pathlib.Path, default=None)
+    ap.add_argument("--bench", type=pathlib.Path)
     ap.add_argument("--errors", type=pathlib.Path)
+    ap.add_argument("--limit", type=int, default=1200)
     args = ap.parse_args()
 
     lex = Lexicon.load(args.lexicon)
     core = list(lex.core)
-    print(f"ядро лексикона: {len(core)} форм, "
-          f"{sum(lex.core.values())} вхождений\n")
-
     loans = sum(is_loanword(w) for w in core)
-    print(f"с буквами заимствований (в е ё ж з ф ц ш щ ъ ю я): "
-          f"{loans} форм, {loans/len(core):.1%} — гармония к ним не применяется\n")
+    print(f"ядро лексикона: {len(core)} форм, из них с буквами заимствований "
+          f"{loans} ({loans/len(core):.1%})\n")
 
-    # 1. согласие с корпусом
+    # --- 1. согласие с корпусом ---------------------------------------------
     print("СОГЛАСИЕ С КОРПУСОМ — доля правильных форм, нарушающих правило")
-    print(f"{'правило':22s} {'по типам':>10s} {'по токенам':>12s}   примеры")
+    print(f"{'правило':22s} {'по типам':>9s} {'по токенам':>11s}   примеры нарушителей")
     agreement = {}
     for name, fn in RULES.items():
-        r_types, ex = rate(core, fn)
-        r_tokens, _ = rate(core, fn, weights=lex.core)
-        agreement[name] = {"types": r_types, "tokens": r_tokens}
-        top = ", ".join(w for w, _ in ex.most_common(3))
-        print(f"{name:22s} {r_types:9.2%} {r_tokens:11.2%}   {top}")
+        bad_types = bad_tokens = 0
+        ex = collections.Counter()
+        for w, f in lex.core.items():
+            v = fn(w)
+            if v:
+                bad_types += 1
+                bad_tokens += f
+                ex[f"{w} ({v[0].detail})"] += f
+        r_t = bad_types / len(core)
+        r_k = bad_tokens / max(sum(lex.core.values()), 1)
+        agreement[name] = {"types": r_t, "tokens": r_k}
+        print(f"{name:22s} {r_t:8.2%} {r_k:10.2%}   "
+              f"{', '.join(w for w, _ in ex.most_common(3))}")
 
-    # 2. различающая сила
-    if not args.errors:
+    # --- 2. добавка сверх словаря -------------------------------------------
+    if not args.bench:
         return
-    wrong = []
-    for tier in ("web", "ocr"):
-        p = args.errors / f"pairs_{tier}.tsv"
+    print(f"\nДОБАВКА СВЕРХ СЛОВАРЯ — ошибки, которые ловит правило,")
+    print("но которые лексикон принимает как правильные слова")
+    header = f"{'правило':22s}" + "".join(f"{t[:12]:>13s}" for t in TASKS)
+    print(header)
+
+    gold: dict[str, list[tuple[str, str]]] = {}
+    for task in TASKS:
+        p = args.bench / f"dev.{task}.jsonl"
         if not p.exists():
             continue
+        pairs = []
         with p.open(encoding="utf-8") as f:
-            next(f)
-            for line in f:
-                c = line.rstrip("\n").split("\t")
-                if len(c) >= 2:
-                    wrong.append((c[0], c[1]))
-    print(f"\nРАЗЛИЧАЮЩАЯ СИЛА — на {len(wrong)} парах «ошибка → верно» из E4")
-    print(f"{'правило':22s} {'у ошибок':>10s} {'у верных':>10s} {'разница':>9s}")
-    power = {}
+            for i, line in enumerate(f):
+                if i >= args.limit:
+                    break
+                d = json.loads(line)
+                a = [t.text for t in tokenize(normalize(d["src"])) if t.is_word]
+                b = [t.text for t in tokenize(normalize(d["tgt"])) if t.is_word]
+                if len(a) != len(b):
+                    continue
+                pairs += [(x, y) for x, y in zip(a, b) if x.lower() != y.lower()]
+        gold[task] = pairs
+
+    # знаменатель: ошибки, невидимые для словаря
+    invisible = {t: [(x, y) for x, y in p if lex.check_form(x).ok]
+                 for t, p in gold.items()}
+    print(f"{'(всего невидимых)':22s}" +
+          "".join(f"{len(invisible[t]):13d}" for t in TASKS if t in invisible))
+
+    added = {}
     for name, fn in RULES.items():
-        bad_wrong = sum(1 for w, _ in wrong if fn(w))
-        bad_right = sum(1 for _, r in wrong if fn(r))
-        rw, rr = bad_wrong / max(len(wrong), 1), bad_right / max(len(wrong), 1)
-        power[name] = {"wrong": rw, "right": rr, "lift": rw - rr}
-        print(f"{name:22s} {rw:9.2%} {rr:9.2%} {rw-rr:+8.2%}")
+        cells, row = [], {}
+        for task in TASKS:
+            if task not in invisible:
+                continue
+            inv = invisible[task]
+            caught = sum(1 for x, _ in inv if fn(x))
+            # ложные: правило срабатывает на правильной форме из той же пары
+            row[task] = {"caught": caught, "n": len(inv),
+                         "share": caught / max(len(inv), 1)}
+            cells.append(f"{caught:5d} {caught/max(len(inv),1):6.1%}")
+        added[name] = row
+        print(f"{name:22s}" + "".join(f"{c:>13s}" for c in cells))
 
-    # где правило меняет вердикт: ошибка нарушает, верная форма — нет
-    print("\nПары, где правило видит разницу:")
-    shown = 0
-    for w, r in wrong:
-        vw, vr = harmony_violations(w), harmony_violations(r)
-        if vw and not vr:
-            print(f"  {w:20s} → {r:20s}  {vw[0].detail}")
-            shown += 1
-            if shown >= 12:
-                break
+    # --- 3. цена: ложные срабатывания на верных формах -----------------------
+    print(f"\nЦЕНА — правило сработало на ПРАВИЛЬНОЙ форме из пары")
+    print(f"{'правило':22s}" + "".join(f"{t[:12]:>13s}" for t in TASKS))
+    cost = {}
+    for name, fn in RULES.items():
+        cells, row = [], {}
+        for task in TASKS:
+            if task not in gold:
+                continue
+            pairs = gold[task]
+            bad = sum(1 for _, y in pairs if fn(y))
+            row[task] = bad / max(len(pairs), 1)
+            cells.append(f"{bad:5d} {row[task]:6.1%}")
+        cost[name] = row
+        print(f"{name:22s}" + "".join(f"{c:>13s}" for c in cells))
 
-    out = {"agreement": agreement, "power": power,
-           "loanword_share": loans / len(core), "core_forms": len(core)}
+    out = {"agreement": agreement, "added": added, "cost": cost}
     pathlib.Path("data/grammar_check.json").write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("\n-> data/grammar_check.json")
 
 
 if __name__ == "__main__":

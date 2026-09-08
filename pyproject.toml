@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sakhaspell"
-version = "0.2.0"
+version = "0.3.0"
 description = "Проверка орфографии якутского языка: возвращает буквы ҕ ҥ ө һ ү и находит опечатки"
 readme = "README.md"
 requires-python = ">=3.10"

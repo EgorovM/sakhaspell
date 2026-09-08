@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from .errors import restoration_variants
 from .fuzzy import Trie
-from .grammar import harmony_violations
+from .grammar import SAFE_RULES, harmony_violations, violations
 from .lexicon import Lexicon
 from .norm import normalize
 from .tokenize import Token, tokenize
@@ -77,12 +77,28 @@ class Issue:
 class SpellChecker:
     def __init__(self, lexicon: Lexicon, *, max_suggestions: int = 5,
                  use_tail: bool = True, grammar: bool = True,
-                 grammar_penalty: int = GRAMMAR_PENALTY) -> None:
+                 grammar_penalty: int = GRAMMAR_PENALTY,
+                 flag_rules: tuple[str, ...] | None = None) -> None:
         self.lex = lexicon
         self.max_suggestions = max_suggestions
         self.use_tail = use_tail
         self.grammar = grammar
         self.grammar_penalty = grammar_penalty
+        # Помечать слово, которое словарь принял, но которое нарушает правила.
+        # Единственное применение правил, способное поймать ошибку, невидимую
+        # для словаря, — и оно не окупается, поэтому выключено по умолчанию.
+        #
+        # Замер (E17): полный набор правил поднимает детекцию на `real` с 67.4%
+        # до 71.8%, но ложные срабатывания растут с 1.79% до 3.53%, а F1 падает
+        # на всех задачах, кроме `real`. Дешёвый набор мягче — 2.16% ложных, —
+        # но тоже отнимает почти пункт F1 на опечатках.
+        #
+        # Причина в заимствованиях: правила исконной фонетики они нарушают
+        # законно, а отличить заимствование от ошибки без словаря нельзя.
+        # Включать имеет смысл на тексте, где заимствований мало — в олонхо,
+        # в художественной прозе:
+        #     SpellChecker(lex, flag_rules=SAFE_RULES)
+        self.flag_rules: tuple[str, ...] | None = flag_rules
         # Внесловарное восстановление отключаемо отдельно от штрафа: это разные
         # применения одного правила, и цена у них разная.
         self.out_of_lex = True
@@ -149,6 +165,10 @@ class SpellChecker:
         for t in tokenize(text):
             v = self.lex.check_token(t, use_tail=self.use_tail)
             if v.ok:
+                if not (self.flag_rules and t.is_word
+                        and violations(t.text, self.flag_rules)):
+                    continue
+                issues.append(Issue(t, self.suggest(t.text), "grammar"))
                 continue
             issues.append(Issue(t, self.suggest(t.text), v.reason))
         return issues
