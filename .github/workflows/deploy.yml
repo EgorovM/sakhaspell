@@ -1,0 +1,115 @@
+name: Публикация страницы
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # Словарь для браузера собирается из того же лексикона, что едет в пакете.
+  # Собираем на месте, а не полагаемся на закоммиченные файлы: так они не
+  # разъедутся, если лексикон поменяется, а docs/data забудут пересобрать.
+  build:
+    name: Сборка страницы
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Распаковка лексикона
+        run: |
+          mkdir -p /tmp/lex
+          for f in sakhaspell/data/*.tsv.gz; do
+            gunzip -c "$f" > "/tmp/lex/$(basename "$f" .gz)"
+          done
+          ls -la /tmp/lex
+
+      - name: Пересборка словаря для браузера
+        run: python scripts/build_web_assets.py --lexicon /tmp/lex --out docs/data
+
+      - name: Собранное совпадает с закоммиченным
+        run: |
+          if ! git diff --quiet --stat -- docs/data; then
+            echo "::warning::docs/data пересобран и отличается от закоммиченного"
+            git diff --stat -- docs/data
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: docs
+
+  pages:
+    name: GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  server:
+    name: sakhaspell.michill.ru
+    needs: build
+    runs-on: ubuntu-latest
+    # Секрет есть только в этом репозитории, у форков его нет — там шаг пропускаем.
+    if: github.repository == 'EgorovM/sakhaspell'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site/
+
+      - name: Ключ
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::notice::секрет DEPLOY_SSH_KEY не задан, выкладку на сервер пропускаю"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Выкладка
+        if: env.SKIP != '1'
+        run: |
+          rsync -az --delete -e "ssh -i ~/.ssh/id_deploy" \
+            site/ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/sakhaspell/"
+
+      - name: Проверка
+        if: env.SKIP != '1'
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://sakhaspell.michill.ru/)
+            size=$(curl -s -o /dev/null -w '%{size_download}' https://sakhaspell.michill.ru/data/forms.txt.gz)
+            enc=$(curl -sI https://sakhaspell.michill.ru/data/forms.txt.gz | grep -ci 'content-encoding' || true)
+            echo "попытка $i: страница $code, словарь $size байт, content-encoding $enc"
+            # Content-Encoding на словаре означает двойную распаковку и битую страницу.
+            if [ "$code" = "200" ] && [ "$size" -gt 500000 ] && [ "$enc" = "0" ]; then
+              echo "сайт отвечает"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::сайт не отвечает как ожидалось"; exit 1

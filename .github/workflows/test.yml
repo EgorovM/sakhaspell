@@ -1,0 +1,66 @@
+name: Тесты
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }} на ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          # Словарь и токенизация зависят от юникода и путей, поэтому один прогон
+          # на macOS и один на Windows — там и всплывают расхождения.
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Установка
+        run: pip install -e ".[dev]"
+
+      - name: Тесты
+        run: pytest -q
+
+      - name: Проверка встроенного словаря
+        shell: bash
+        run: |
+          python -c "
+          from sakhaspell import SpellChecker, Lexicon
+          lex = Lexicon.load()
+          assert len(lex.core) > 290000, f'ядро подозрительно мало: {len(lex.core)}'
+          assert len(lex.shadow) > 4000, f'теней мало: {len(lex.shadow)}'
+          ch = SpellChecker(lex)
+          # эти пары ловятся словарём и не должны сломаться незаметно
+          for bad, good in [
+              ('Ого уорэгэ кисиэхэ сана кыагы биэрэр', 'Оҕо үөрэҕэ киһиэхэ саҥа кыаҕы биэрэр'),
+              ('Биьиги эьиги туьунан уьу', 'Биһиги эһиги туһунан үһү'),
+              ('Мин огом онгор кун', 'Мин оҕом оҥор күн'),
+          ]:
+              got = ch.correct(bad)
+              assert got == good, f'{bad!r} -> {got!r}, ждали {good!r}'
+          # правильный текст трогать нельзя
+          clean = 'Саха сирин олохтоохторо бу сайын үлэлээбиттэрин туһунан кэпсээтилэр'
+          assert ch.correct(clean) == clean, ch.correct(clean)
+          print('словарь на месте:', len(lex.core), 'форм')
+          "
+
+      - name: Консольная команда
+        shell: bash
+        run: |
+          sakhaspell check "Ого уорэгэ" || test $? -eq 1
+          echo "Биьиги" | sakhaspell fix

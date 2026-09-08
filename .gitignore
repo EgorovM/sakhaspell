@@ -22,3 +22,8 @@ data/lexicon/shadows.tsv
 # Чекпоинты модели. Тэггер обучается за 33 минуты на одной H200,
 # см. scripts/train_tagger.py
 runs/
+
+# Сборка пакета
+dist/
+build/
+*.egg-info/

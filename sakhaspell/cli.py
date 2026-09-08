@@ -1,8 +1,11 @@
 """Командная строка спелчекера.
 
-    python -m sakhaspell check "Ого уорэгэ кисиэхэ сана кыагы биэрэр"
-    python -m sakhaspell fix   --tagger runs/tagger_v1 файл.txt
-    python -m sakhaspell repl
+    sakhaspell check "Ого уорэгэ кисиэхэ сана кыагы биэрэр"
+    sakhaspell fix --file статья.txt --in-place
+    sakhaspell repl
+
+Словарь встроен в пакет, указывать его не нужно. Флаг --lexicon пригодится,
+только если собран свой.
 """
 from __future__ import annotations
 
@@ -12,9 +15,6 @@ import pathlib
 import sys
 
 from .pipeline import Pipeline
-
-DEFAULT_LEXICON = "data/lexicon"
-
 
 def _pipeline(args) -> Pipeline:
     return Pipeline(args.lexicon, tagger_dir=args.tagger, device=args.device)
@@ -82,7 +82,8 @@ def cmd_repl(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="sakhaspell",
                                  description="спелчекер якутского языка")
-    ap.add_argument("--lexicon", default=DEFAULT_LEXICON, help="каталог лексикона")
+    ap.add_argument("--lexicon", default=None,
+                    help="каталог лексикона; по умолчанию встроенный в пакет")
     ap.add_argument("--tagger", default=None, help="каталог обученного тэггера")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--no-tagger", action="store_true",

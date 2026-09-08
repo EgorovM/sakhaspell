@@ -102,24 +102,65 @@ L2  тэггер            посимвольная разметка: для к
 
 Подробности с цифрами — [`docs/experiments.md`](docs/experiments.md).
 
-## Установка и запуск
+## Установка
 
 ```bash
-python -m sakhaspell --lexicon data/lexicon check "текст"
-python -m sakhaspell --lexicon data/lexicon fix --file статья.txt --in-place
-python -m sakhaspell --lexicon data/lexicon repl
-python -m sakhaspell --lexicon data/lexicon --tagger runs/tagger_v2 check "текст"
+pip install sakhaspell
 ```
 
-Словарный слой не требует ничего, кроме Python 3.10+. Тэггер требует torch.
+Словарь на 300 304 словоформы встроен в пакет — скачивать и настраивать нечего.
+У словарного слоя нет зависимостей вообще, только стандартная библиотека.
+
+```bash
+sakhaspell check "Ого уорэгэ кисиэхэ"       # показать ошибки
+sakhaspell fix --file статья.txt --in-place # исправить на месте
+sakhaspell repl                             # интерактивно
+cat текст.txt | sakhaspell fix > исправлено.txt
+```
+
+Из Python:
 
 ```python
-from sakhaspell.pipeline import Pipeline
+from sakhaspell import SpellChecker, Lexicon
 
-p = Pipeline("data/lexicon", tagger_dir="runs/tagger_v2")
-for c in p.corrections("Ого уорэгэ кисиэхэ"):
-    print(c.start, c.end, c.before, "→", c.after, c.source)
+checker = SpellChecker(Lexicon.load())
+checker.correct("Ого уорэгэ кисиэхэ")       # 'Оҕо үөрэҕэ киһиэхэ'
+
+for issue in checker.check("Мин огом онгор"):
+    print(issue.token.start, issue.token.text, issue.best)
 ```
+
+Позиции правок в исходном тексте — для подсветки в редакторе:
+
+```python
+from sakhaspell import Pipeline
+
+p = Pipeline()
+for c in p.corrections("Ого уорэгэ кисиэхэ"):
+    print(c.start, c.end, c.before, "→", c.after, c.alternatives)
+```
+
+### Контекстная модель
+
+Даёт +3.5 пункта F1 на восстановлении ҕҥөһү. Чекпоинт в пакет не входит:
+обучается за 33 минуты на одной H200 через `scripts/train_tagger.py`.
+
+```bash
+pip install "sakhaspell[tagger]"
+sakhaspell --tagger runs/tagger_v2 check "текст"
+```
+
+### HTTP-сервис
+
+```bash
+pip install "sakhaspell[server]"
+uvicorn sakhaspell.server:app --port 8080
+```
+
+`POST /check` — проверка текста с позициями, `POST /spell` — быстрый вердикт по
+словам для подсветки, `POST /suggest` — подсказки по требованию. Разнесено
+намеренно: проверка стоит 0.0016 мс на слово, подсказки — 51 мс.
+
 
 ## Сборка с нуля
 
@@ -135,6 +176,20 @@ python scripts/build_bench.py     --lexicon data/lexicon --errors data/errors --
 python scripts/eval_bench.py      --lexicon data/lexicon --bench data/bench --split dev
 python scripts/train_tagger.py    --sent data/sent --out runs/tagger_v2 --steps 30000
 ```
+
+Готовый словарь лежит в `sakhaspell/data/` сжатым и подхватывается сам;
+`Lexicon.load("свой/каталог")` берёт другой.
+
+## Сборка и выкладка
+
+| Что | Когда | Куда |
+|---|---|---|
+| `test.yml` | push и PR | pytest на 3.10–3.13, плюс macOS и Windows |
+| `publish.yml` | релиз с тегом | PyPI через доверенную публикацию |
+| `deploy.yml` | изменения в `docs/` | GitHub Pages и sakhaspell.michill.ru |
+
+Тесты проверяют не только код: отдельный шаг грузит встроенный словарь и
+прогоняет через него фиксированные пары, чтобы порча данных не проехала молча.
 
 ## Страница
 

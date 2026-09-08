@@ -3,7 +3,7 @@
     uvicorn sakhaspell.server:app --host 0.0.0.0 --port 8080
 
 Настройка через переменные окружения:
-    SAKHASPELL_LEXICON   каталог лексикона (по умолчанию data/lexicon)
+    SAKHASPELL_LEXICON   каталог лексикона (по умолчанию встроенный в пакет)
     SAKHASPELL_TAGGER    каталог тэггера; без него работает только словарь
     SAKHASPELL_DEVICE    cpu | cuda
     SAKHASPELL_THRESHOLD порог уверенности тэггера
@@ -30,7 +30,7 @@ except ImportError as e:  # pragma: no cover
     raise SystemExit("нужен fastapi: pip install fastapi uvicorn") from e
 
 
-LEXICON = os.getenv("SAKHASPELL_LEXICON", "data/lexicon")
+LEXICON = os.getenv("SAKHASPELL_LEXICON") or None
 TAGGER = os.getenv("SAKHASPELL_TAGGER") or None
 DEVICE = os.getenv("SAKHASPELL_DEVICE", "cpu")
 THRESHOLD = float(os.getenv("SAKHASPELL_THRESHOLD", "0.9"))

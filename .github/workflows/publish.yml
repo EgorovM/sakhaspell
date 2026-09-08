@@ -1,0 +1,59 @@
+name: Публикация в PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Сборка
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Сборка колеса и sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Проверка метаданных
+        run: |
+          pip install twine
+          twine check dist/*
+
+      # Версия в pyproject.toml должна совпадать с тегом релиза, иначе PyPI
+      # получит не то, что обещано в релизе, и откатить это уже нельзя.
+      - name: Версия совпадает с тегом
+        if: github.event_name == 'release'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "тег $TAG,версия в pyproject $VER"
+          test "$TAG" = "$VER" || { echo "::error::тег $TAG не совпадает с версией $VER"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Загрузка в PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sakhaspell
+    permissions:
+      # Доверенная публикация: PyPI проверяет OIDC-токен этого workflow,
+      # поэтому хранить пароль или API-токен в секретах не нужно.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

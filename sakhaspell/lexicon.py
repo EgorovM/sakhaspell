@@ -42,9 +42,10 @@ class Lexicon:
 
     # --- загрузка -----------------------------------------------------------
     @classmethod
-    def load(cls, path: str | pathlib.Path, *, with_tail: bool = True,
-             with_shadows: bool = True) -> "Lexicon":
-        path = pathlib.Path(path)
+    def load(cls, path: str | pathlib.Path | None = None, *,
+             with_tail: bool = True, with_shadows: bool = True) -> "Lexicon":
+        """Загружает лексикон. Без аргумента берётся встроенный в пакет."""
+        path = pathlib.Path(path) if path is not None else bundled_path()
         lex = cls()
         lex.core = _read(path / "core.tsv", value_col=1)
         if with_tail:
@@ -109,6 +110,15 @@ class Lexicon:
 
     def flagged(self, text: str, **kw) -> list[Token]:
         return [t for t, v in self.check_text(text, **kw) if not v.ok]
+
+
+def bundled_path() -> pathlib.Path:
+    """Каталог со словарём, который едет вместе с пакетом.
+
+    Словарь лежит сжатым (7.5 МБ на 300 тысяч форм с хвостом), поэтому
+    `pip install sakhaspell` даёт рабочий чекер без отдельной загрузки данных.
+    """
+    return pathlib.Path(__file__).resolve().parent / "data"
 
 
 def _resolve(path: pathlib.Path) -> pathlib.Path | None:

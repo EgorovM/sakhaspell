@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sakhaspell"
+version = "0.1.0"
+description = "Проверка орфографии якутского языка: возвращает буквы ҕ ҥ ө һ ү и находит опечатки"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Michil Egorov", email = "egorovmichil9@gmail.com" }]
+keywords = ["spellchecker", "spelling", "yakut", "sakha", "nlp", "turkic", "orthography"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Russian",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Linguistic",
+]
+# Словарный слой не тянет зависимостей вовсе: только стандартная библиотека.
+dependencies = []
+
+[project.optional-dependencies]
+# Контекстная модель: посимвольный тэггер, +3.5 пункта F1 на восстановлении ҕҥөһү.
+tagger = ["torch>=2.0"]
+server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+sakhaspell = "sakhaspell.cli:main"
+
+[project.urls]
+Homepage = "https://sakhaspell.michill.ru"
+Source = "https://github.com/EgorovM/sakhaspell"
+Issues = "https://github.com/EgorovM/sakhaspell/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sakhaspell"]
+
+# Словарь лежит в sakhaspell/data и едет вместе с пакетом: 7.5 МБ на 300 304
+# словоформы плюс хвост. Без хвоста ложные срабатывания растут с 1.68% до 2.24%,
+# поэтому он тут не лишний.
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/sakhaspell",
+    "/tests",
+    "/scripts",
+    "/docs/*.md",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

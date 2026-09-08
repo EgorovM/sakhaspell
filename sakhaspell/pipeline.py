@@ -34,7 +34,7 @@ class Correction:
 
 
 class Pipeline:
-    def __init__(self, lexicon_dir: str | pathlib.Path, *,
+    def __init__(self, lexicon_dir: str | pathlib.Path | None = None, *,
                  tagger_dir: str | pathlib.Path | None = None,
                  device: str = "cpu", max_suggestions: int = 5,
                  tagger_threshold: float = 0.9) -> None:
