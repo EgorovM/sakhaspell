@@ -38,6 +38,8 @@ jobs:
 
       - name: Проверка встроенного словаря
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python -c "
           from sakhaspell import SpellChecker, Lexicon
@@ -61,6 +63,8 @@ jobs:
 
       - name: Консольная команда
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           sakhaspell check "Ого уорэгэ" || test $? -eq 1
           echo "Биьиги" | sakhaspell fix
@@ -77,25 +81,34 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Установка из колеса
+      # Собираем отдельным интерпретатором: иначе build и его зависимости
+      # осядут в том же окружении и проверка на чистоту поймает их, а не нас.
+      - name: Сборка колеса
         run: |
-          pip install build
-          python -m build --wheel
-          pip install dist/*.whl
+          python -m venv /tmp/buildenv
+          /tmp/buildenv/bin/pip install -q build
+          /tmp/buildenv/bin/python -m build --wheel --outdir dist
+
+      - name: Установка в чистое окружение
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install -q dist/*.whl
 
       - name: Ни одной сторонней зависимости
         run: |
-          EXTRA=$(pip list --format=freeze --exclude pip --exclude setuptools --exclude wheel \
-                  | grep -v '^sakhaspell==' || true)
+          EXTRA=$(/tmp/clean/bin/pip list --format=freeze \
+                  | grep -viE '^(pip|setuptools|wheel|sakhaspell)==' || true)
           if [ -n "$EXTRA" ]; then
             echo "::error::подтянулись лишние пакеты:"; echo "$EXTRA"; exit 1
           fi
           echo "зависимостей нет, как и задумано"
 
       - name: Работает без torch
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           cd /tmp
-          python -c "
+          /tmp/clean/bin/python -c "
           import importlib.util
           assert importlib.util.find_spec('torch') is None, 'torch не должен быть установлен'
           from sakhaspell import SpellChecker, Lexicon
@@ -105,4 +118,4 @@ jobs:
           assert apply_tags('ого', make_tags('ого', 'оҕо')) == 'оҕо'
           print('словарный слой и разметка работают без torch')
           "
-          sakhaspell check "сана" || test $? -eq 1
+          /tmp/clean/bin/sakhaspell check "сана" || test $? -eq 1

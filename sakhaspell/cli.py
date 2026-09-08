@@ -16,6 +16,21 @@ import sys
 
 from .pipeline import Pipeline
 
+
+def _force_utf8() -> None:
+    """Вывод в UTF-8 независимо от кодировки консоли.
+
+    На Windows консоль по умолчанию не UTF-8, и печать якутских букв валится
+    с UnicodeEncodeError ещё до того, как пользователь увидит хоть одну правку.
+    Поймано на прогоне CI под windows-latest.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
 def _pipeline(args) -> Pipeline:
     return Pipeline(args.lexicon, tagger_dir=args.tagger, device=args.device)
 
@@ -103,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "fix":
             s.add_argument("--in-place", action="store_true")
 
+    _force_utf8()
     args = ap.parse_args(argv)
     return args.fn(args)
 
