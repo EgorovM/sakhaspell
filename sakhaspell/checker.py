@@ -1,5 +1,12 @@
 """Спелчекер: слой L1 целиком.
 
+Правила якутской грамматики (`grammar.py`) участвуют здесь двумя способами, и
+оба бесплатны по ложным срабатываниям: штрафом кандидату, нарушающему гармонию
+гласных, и восстановлением спецбукв за пределами лексикона. Третий способ —
+отсев по гармонии в хвосте лексикона — живёт в `Lexicon.check_form` и по
+умолчанию выключен, потому что стоит 0.04 пункта ложных срабатываний.
+
+
 Порядок проверки одного слова определяется не удобством, а тем, какие ошибки
 встречаются на самом деле:
 
@@ -20,6 +27,7 @@ from dataclasses import dataclass
 
 from .errors import restoration_variants
 from .fuzzy import Trie
+from .grammar import harmony_violations
 from .lexicon import Lexicon
 from .norm import normalize
 from .tokenize import Token, tokenize
@@ -29,6 +37,12 @@ from .tokenize import Token, tokenize
 # разводились по частоте.
 FREQ_WEIGHT = 12
 MAX_SEARCH_COST = 220
+# Штраф кандидату, нарушающему гармонию гласных. На деноминализации гармонию
+# нарушает 33.6% испорченных слов против 0.4% правильных (E15), так что признак
+# сильный. Величина в тех же сотых, что и цена правки: 40 — меньше одной обычной
+# правки, поэтому гармония разводит кандидатов равной цены, но не перебивает
+# заметно более дешёвый вариант.
+GRAMMAR_PENALTY = 40
 # Если восстановление спецбукв дало кандидата не дороже этого, полный поиск по
 # дереву пропускается. 105 — это три дешёвых замены (ҕ→г и т.п.) или одна такая
 # замена плюс запас; дороже уже начинается территория настоящих опечаток.
@@ -40,11 +54,13 @@ class Suggestion:
     form: str
     cost: int
     freq: int
-    kind: str          # restore | fuzzy
+    kind: str          # shadow | restore | fuzzy
+    penalty: int = 0   # штраф за нарушение правил грамматики
 
     @property
     def score(self) -> float:
-        return self.cost - FREQ_WEIGHT * math.log10(max(self.freq, 1))
+        return (self.cost + self.penalty
+                - FREQ_WEIGHT * math.log10(max(self.freq, 1)))
 
 
 @dataclass
@@ -60,10 +76,16 @@ class Issue:
 
 class SpellChecker:
     def __init__(self, lexicon: Lexicon, *, max_suggestions: int = 5,
-                 use_tail: bool = True) -> None:
+                 use_tail: bool = True, grammar: bool = True,
+                 grammar_penalty: int = GRAMMAR_PENALTY) -> None:
         self.lex = lexicon
         self.max_suggestions = max_suggestions
         self.use_tail = use_tail
+        self.grammar = grammar
+        self.grammar_penalty = grammar_penalty
+        # Внесловарное восстановление отключаемо отдельно от штрафа: это разные
+        # применения одного правила, и цена у них разная.
+        self.out_of_lex = True
         # Дерево строим по ядру: подсказывать надо только надёжными формами.
         self.trie = Trie.from_freq(lexicon.core)
 
@@ -100,6 +122,23 @@ class SpellChecker:
                 if prev is None or c.cost < prev.cost:
                     out[c.form] = Suggestion(c.form, c.cost, c.freq, "fuzzy")
 
+        # 3. Восстановление вне лексикона. Форм якутского бесконечно много,
+        # ядро покрывает не всё: у 2.6% ошибок бенчмарка верной формы в нём нет,
+        # и там лексикону предложить нечего. Если само слово нарушает гармонию,
+        # а вариант восстановления её соблюдает, это достаточное основание
+        # предложить вариант, даже не найдя его в словаре.
+        if self.grammar and self.out_of_lex and not out and harmony_violations(low):
+            for v in restoration_variants(low):
+                if v != low and not harmony_violations(v):
+                    n_changed = sum(a != b for a, b in zip(v, low)) or 1
+                    out[v] = Suggestion(v, 35 * n_changed, 1, "grammar")
+                    break
+
+        if self.grammar and self.grammar_penalty:
+            for s in out.values():
+                if harmony_violations(s.form):
+                    s.penalty = self.grammar_penalty
+
         res = sorted(out.values(), key=lambda s: s.score)
         return _restore_case(word, res)[: self.max_suggestions]
 
@@ -131,7 +170,9 @@ def _restore_case(src: str, sugg: list[Suggestion]) -> list[Suggestion]:
     if src.islower() or not src:
         return sugg
     if src.isupper():
-        return [Suggestion(s.form.upper(), s.cost, s.freq, s.kind) for s in sugg]
-    if src[0].isupper():
-        return [Suggestion(s.form.capitalize(), s.cost, s.freq, s.kind) for s in sugg]
-    return sugg
+        fn = str.upper
+    elif src[0].isupper():
+        fn = str.capitalize
+    else:
+        return sugg
+    return [Suggestion(fn(s.form), s.cost, s.freq, s.kind, s.penalty) for s in sugg]

@@ -175,3 +175,65 @@ def test_numbers_and_latin_are_skipped():
     toks = {t.text: t for t in tokenize("2024 Linux")}
     assert lex.check_token(toks["2024"]).ok
     assert lex.check_token(toks["Linux"]).ok
+
+
+# --- правила грамматики ------------------------------------------------------
+from sakhaspell.grammar import (cluster_violations, harmony_violations,
+                                is_loanword, parse_nuclei, positional_violations)
+
+
+@pytest.mark.parametrize("word,expected", [
+    ("оҕо", ["о", "о"]),
+    ("үөрэх", ["үө", "э"]),            # дифтонг разбирается как одно ядро
+    ("кыаҕы", ["ыа", "ы"]),
+    ("сүһүөх", ["ү", "үө"]),
+    ("уонна", ["уо", "а"]),
+    ("кыыс", ["ыы"]),                  # долгота — одно ядро, не две гласные
+    ("оскуола", ["о", "уо", "а"]),
+])
+def test_nuclei_parsing(word, expected):
+    assert [n for _, n in parse_nuclei(word)] == expected
+
+
+@pytest.mark.parametrize("word", [
+    "оҕо", "үөрэх", "киһи", "туһунан", "уонна", "кыаҕы", "олоҥхо",
+    "оҕолорбутугар", "үөрэммитэ", "биһиги", "түмүгэр", "сайын",
+])
+def test_correct_words_obey_harmony(word):
+    assert harmony_violations(word) == []
+
+
+@pytest.mark.parametrize("word", [
+    "сурэ",      # должно быть сүрэ: у→э невозможно
+    "уорэх",     # үөрэх
+    "тумугэр",   # түмүгэр
+    "болла",     # буолла
+])
+def test_denormalized_words_break_harmony(word):
+    assert harmony_violations(word), f"{word} должно нарушать гармонию"
+
+
+@pytest.mark.parametrize("word", [
+    "дьон-сэргэ", "күүс-көмө", "дьиэ-уот", "ас-үөл", "үп-харчы",
+])
+def test_hyphen_parts_checked_separately(word):
+    # гармония действует внутри слова; через дефис ряд меняется законно
+    assert harmony_violations(word) == []
+
+
+def test_loanwords_are_exempt():
+    # буквы, которые в якутском бывают только в заимствованиях
+    assert is_loanword("революция")
+    assert not is_loanword("оҕо")
+    # заимствование не должно давать нарушений, даже если ряд не выдержан
+    assert harmony_violations("революция") == []
+
+
+def test_positional_rule():
+    assert positional_violations("ҥа")          # слово не начинается на ҥ
+    assert not positional_violations("оҕо")
+
+
+def test_cluster_rule_ignores_loanwords():
+    assert cluster_violations("млрд")
+    assert cluster_violations("оҕолор") == []

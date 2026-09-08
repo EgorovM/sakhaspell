@@ -25,16 +25,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Распаковка лексикона
-        run: |
-          mkdir -p /tmp/lex
-          for f in sakhaspell/data/*.tsv.gz; do
-            gunzip -c "$f" > "/tmp/lex/$(basename "$f" .gz)"
-          done
-          ls -la /tmp/lex
-
       - name: Пересборка словаря для браузера
-        run: python scripts/build_web_assets.py --lexicon /tmp/lex --out docs/data
+        run: python scripts/build_web_assets.py --lexicon sakhaspell/data --out docs/data
 
       - name: Собранное совпадает с закоммиченным
         run: |

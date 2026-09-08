@@ -25,6 +25,16 @@ MAX_PREFIX = 35          # длина префикса кодируется од
 FREQ_SCALE = 16          # log2(freq) * 16 укладывается в байт до freq ~ 2^15
 
 
+def _open(path: pathlib.Path):
+    """Файл как есть или его gzip-версия: в пакете словарь лежит сжатым."""
+    if path.exists():
+        return path.open(encoding="utf-8")
+    gz = path.with_suffix(path.suffix + ".gz")
+    if gz.exists():
+        return gzip.open(gz, "rt", encoding="utf-8")
+    raise FileNotFoundError(f"нет ни {path}, ни {gz}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lexicon", type=pathlib.Path, required=True)
@@ -33,14 +43,14 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     freq: dict[str, int] = {}
-    with (args.lexicon / "core.tsv").open(encoding="utf-8") as f:
+    with _open(args.lexicon / "core.tsv") as f:
         next(f)
         for line in f:
             c = line.rstrip("\n").split("\t")
             freq[c[0]] = int(c[1])
 
     shadows: dict[str, str] = {}
-    with (args.lexicon / "shadows.tsv").open(encoding="utf-8") as f:
+    with _open(args.lexicon / "shadows.tsv") as f:
         header = next(f).rstrip("\n").split("\t")
         i_o, i_d = header.index("origin"), header.index("demote")
         for line in f:

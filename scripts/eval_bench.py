@@ -106,11 +106,15 @@ def main():
     ap.add_argument("--split", default="dev")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tag", default="L1")
+    ap.add_argument("--no-grammar", action="store_true",
+                    help="отключить правила грамматики целиком")
+    ap.add_argument("--tail-grammar", action="store_true",
+                    help="отсеивать формы хвоста, нарушающие гармонию")
     args = ap.parse_args()
 
     lex = Lexicon.load(args.lexicon)
     t0 = time.perf_counter()
-    ch = SpellChecker(lex)
+    ch = SpellChecker(lex, grammar=not args.no_grammar)
     print(f"лексикон: ядро {len(lex.core)}, дерево построено за "
           f"{time.perf_counter()-t0:.1f} с\n")
 

@@ -27,3 +27,4 @@ runs/
 dist/
 build/
 *.egg-info/
+data/grammar_check.json

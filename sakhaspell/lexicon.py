@@ -16,6 +16,7 @@ from __future__ import annotations
 import pathlib
 from dataclasses import dataclass, field
 
+from .grammar import harmony_violations
 from .norm import normalize
 from .tokenize import Token, tokenize
 
@@ -74,7 +75,7 @@ class Lexicon:
 
     # --- проверка -----------------------------------------------------------
     def check_form(self, w: str, *, use_tail: bool = True, use_hyphen: bool = True,
-                   depth: int = 0) -> Verdict:
+                   use_grammar: bool = False, depth: int = 0) -> Verdict:
         w = w.lower()
         if w in self.shadow:
             return Verdict(False, "shadow")
@@ -84,18 +85,32 @@ class Lexicon:
         if use_hyphen and depth == 0 and ("-" in w or "'" in w or "’" in w):
             parts = [p for p in w.replace("’", "'").replace("'", "-").split("-") if p]
             if len(parts) > 1 and all(
-                    self.check_form(p, use_tail=use_tail, use_hyphen=False, depth=1).ok
+                    self.check_form(p, use_tail=use_tail, use_hyphen=False,
+                                    use_grammar=use_grammar, depth=1).ok
                     for p in parts):
                 return Verdict(True, "hyphen-parts")
 
         if use_tail and w in self.tail:
             if self.other.get(w, 0) >= CORROBORATION:
+                # Подтверждение другими источниками спасает редкое слово, но
+                # заодно спасает и систематическую ошибку. Нарушение гармонии —
+                # независимый признак, и он даёт +1.45 пункта F1 на задаче `real`.
+                #
+                # По умолчанию выключено, потому что обмен не бесплатный:
+                # ложные срабатывания на редакционном тексте растут с 1.684% до
+                # 1.724%. Дополнительно отвергаются 6 320 форм хвоста, и это в
+                # основном законные русские имена с якутскими аффиксами
+                # («лидочка», «иисустан», «синагогаларга»), а не ошибки —
+                # гармонию они нарушают по праву заимствования. Включать стоит
+                # там, где имён мало: в художественном тексте, в олонхо.
+                if use_grammar and harmony_violations(w):
+                    return Verdict(False, "tail-disharmonic", self.tail[w])
                 return Verdict(True, "tail-corroborated", self.tail[w])
             return Verdict(False, "tail-unconfirmed", self.tail[w])
 
         return Verdict(False, "unknown")
 
-    def check_token(self, t: Token, **kw) -> Verdict:
+    def check_token(self, t: Token, **kw) -> Verdict:  # noqa: D102
         if t.kind == "number":
             return Verdict(True, "number")
         if t.kind == "latin":
