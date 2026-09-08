@@ -64,3 +64,45 @@ jobs:
         run: |
           sakhaspell check "Ого уорэгэ" || test $? -eq 1
           echo "Биьиги" | sakhaspell fix
+
+  # Словарный слой обязан работать без единой зависимости. Проверяем отдельной
+  # задачей, потому что в среде с torch этого не заметить: он подтягивается
+  # первым же импортом и всё выглядит рабочим.
+  no-deps:
+    name: Установка без зависимостей
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Установка из колеса
+        run: |
+          pip install build
+          python -m build --wheel
+          pip install dist/*.whl
+
+      - name: Ни одной сторонней зависимости
+        run: |
+          EXTRA=$(pip list --format=freeze --exclude pip --exclude setuptools --exclude wheel \
+                  | grep -v '^sakhaspell==' || true)
+          if [ -n "$EXTRA" ]; then
+            echo "::error::подтянулись лишние пакеты:"; echo "$EXTRA"; exit 1
+          fi
+          echo "зависимостей нет, как и задумано"
+
+      - name: Работает без torch
+        run: |
+          cd /tmp
+          python -c "
+          import importlib.util
+          assert importlib.util.find_spec('torch') is None, 'torch не должен быть установлен'
+          from sakhaspell import SpellChecker, Lexicon
+          from sakhaspell.tagger import make_tags, apply_tags
+          ch = SpellChecker(Lexicon.load())
+          assert ch.correct('Ого уорэгэ') == 'Оҕо үөрэҕэ'
+          assert apply_tags('ого', make_tags('ого', 'оҕо')) == 'оҕо'
+          print('словарный слой и разметка работают без torch')
+          "
+          sakhaspell check "сана" || test $? -eq 1

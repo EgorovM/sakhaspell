@@ -51,7 +51,9 @@ class Pipeline:
 
     def _load_tagger(self, path: pathlib.Path, device: str) -> None:
         import torch
-        from .tagger import CharTagger, CharVocab, TaggerConfig
+        from .model import CharTagger, TaggerConfig
+        from .tagger import CharVocab
+
         ckpt = torch.load(path / "best.pt", map_location=device, weights_only=False)
         cfg = TaggerConfig(**ckpt["cfg"])
         model = CharTagger(cfg)

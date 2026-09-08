@@ -23,8 +23,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, IterableDataset
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from sakhaspell.tagger import (CharTagger, CharVocab, TaggerConfig, KEEP, DELETE,
-                               N_TAGS, PAD, apply_tags, make_tags)
+from sakhaspell.model import CharTagger, TaggerConfig
+from sakhaspell.tagger import (KEEP, DELETE, N_TAGS, PAD, CharVocab,
+                               apply_tags, make_tags)
 
 EDITED = ["kyym", "eder_saas", "sakha_sire", "uluus_media", "svfu",
           "sakhapechat", "childrens_lib", "sakha_texts_v2"]
