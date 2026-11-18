@@ -34,10 +34,19 @@ def test_hyphenated_compound_is_one_token():
 
 
 def test_token_kinds():
-    kinds = {t.text: t.kind for t in tokenize("Саха 1990-с Linux")}
+    kinds = {t.text: t.kind for t in tokenize("Саха 1990-с Linux 5-тэн")}
     assert kinds["Саха"] == "word"
     assert kinds["Linux"] == "latin"
     assert kinds["1990-с"] in ("number", "word")
+    assert kinds["5-тэн"] == "number"
+
+
+def test_mixed_sakha_proxies_keep_word_intact():
+    for w in ("Cаха", "киhи", "ыhардыы", "о5обут", "биллэр-к0ст0р", "yрдyк"):
+        toks = tokenize(w)
+        assert [(t.text, t.kind) for t in toks] == [(w, "word")]
+    assert [t.kind for t in tokenize("CD-ROM")] == ["latin"]
+    assert [(t.text, t.kind) for t in tokenize("100г")] == [("100", "number"), ("г", "word")]
 
 
 def test_abbreviation_does_not_split_sentence():
@@ -74,6 +83,17 @@ def test_invisible_removed_with_offset_map():
 def test_latin_homoglyph_fixed_only_inside_cyrillic_word():
     assert fix_mixed_script("Cаха") == "Саха"      # латинская C
     assert fix_mixed_script("CD-ROM") == "CD-ROM"  # трогать нельзя
+    assert normalize("Cаха") == "Саха"             # токен не должен рваться на C + аха
+
+
+def test_checker_restores_chat_proxies():
+    from sakhaspell.checker import SpellChecker
+    lex = Lexicon.load()
+    ch = SpellChecker(lex)
+    assert ch.correct("киhи") == "киһи"
+    assert ch.correct("о5обут") == "оҕобут"
+    assert ch.correct("биллэр-к0ст0р") == "биллэр-көстөр"
+    assert ch.correct("yрдyк") == "үрдүк"
 
 
 def test_normalize_is_idempotent():
